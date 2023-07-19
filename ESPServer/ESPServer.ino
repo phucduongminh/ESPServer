@@ -1,10 +1,16 @@
 #include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
 
+#define UDP_PORT 12345
 #define SSID "Tue Minh Vlog"
 #define PASSWD "19941996"
 #define SOCK_PORT 124
 
-WiFiServer sockServer(SOCK_PORT);
+WiFiUDP UDP;
+
+char packet[255];
+char reply[] = "Packet received!";
+
 
 void setup(){
     Serial.begin(115200);
@@ -16,34 +22,24 @@ void setup(){
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
 
-    sockServer.begin();
+    UDP.begin(UDP_PORT);
+    Serial.print("Listening on UDP port");
+    Serial.println(UDP_PORT);
 }
 
 void loop(){
-    WiFiClient client = sockServer.available();
-    if (client){
-        //Serial.println("Iniciou uma conexao!");
-        unsigned int count = 1000;
-        unsigned int countDevice = 100000;
-        while (client.connected() && --count > 0){
-            delay(200);
-            String treeWayBuffer = String();
-            bool hasData = false;
-            while (client.available() > 0 && --countDevice > 0){
-              //if (treeWayBuffer.length() < 255) {
-                treeWayBuffer.concat((char)client.read());
-              //}
-              hasData = true;
-            }
-            if (hasData) {
-              Serial.println(treeWayBuffer);
-              if (treeWayBuffer.equals("SYN")) {
-                client.print("SYN-ACK");
-              }
-            }
-        }
-        //client.flush();
-        client.stop();
-        delay(10);
+  // If packet received...
+  int packetSize = UDP.parsePacket();
+  if (packetSize) {
+    Serial.print("Received packet! Size: ");
+    Serial.println(packetSize); 
+    int len = UDP.read(packet, 255);
+    if (len > 0)
+    {
+      packet[len] = '\0';
     }
+    UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+    UDP.print(WiFi.localIP());
+    UDP.endPacket();
+  }
 }
