@@ -7,8 +7,8 @@
 #include <IRutils.h>
 
 #define UDP_PORT 12345
-#define SSID "VNPT-NGOCANH"
-#define PASSWD "tueminhvolg"
+#define SSID ""
+#define PASSWD ""
 #define SOCK_PORT 124
 
 //#define IR_RECV_PIN 14 // GPIO5 (D5) for IR receiver
@@ -79,7 +79,7 @@ void setup()
     // Set up what we want to send.
     // See state_t, opmode_t, fanspeed_t, swingv_t, & swingh_t in IRsend.h for
     // all the various options.
-    //ac.next.protocol = decode_type_t::DAIKIN;      // Set a protocol to use.
+    //ac.next.protocol = decode_type_t::TOSHIBA_AC;      // Set a protocol to use.
     ac.next.model = 1;                             // Some A/Cs have different models. Try just the first.
     ac.next.mode = stdAc::opmode_t::kCool;         // Run in cool mode initially.
     ac.next.celsius = true;                        // Use Celsius for temp units. False = Fahrenheit
