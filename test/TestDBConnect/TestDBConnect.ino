@@ -9,9 +9,9 @@ const char* password = "";
 // Define MySQL server settings
 IPAddress server_ip(192, 168, 1, 100); // IP address of your MySQL server
 int server_port = 3306;               // MySQL server port
-char db_user[] = "root";              // MySQL user
-char db_password[] = "DambaokhieM"; // MySQL password
-char db_name[] = "esp_test";          // MySQL database name
+char db_user[] = "";              // MySQL user
+char db_password[] = ""; // MySQL password
+char db_name[] = "";          // MySQL database name
 
 WiFiClient client;
 MySQL_Connection conn((Client *)&client);
