@@ -6,8 +6,8 @@
 #include <IRutils.h>
 
 #define UDP_PORT 12345
-#define SSID "cslab-505"
-#define PASSWD "ccslab-505"
+#define SSID ""
+#define PASSWD ""
 #define SOCK_PORT 124
 
 #define IR_RECV_PIN 14  // GPIO5 (D5) for IR receiver

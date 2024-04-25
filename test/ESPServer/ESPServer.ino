@@ -2,8 +2,8 @@
 #include <WiFiUdp.h>
 
 #define UDP_PORT 12345
-#define SSID "Tue Minh Vlog"
-#define PASSWD "19941996"
+#define SSID ""
+#define PASSWD ""
 #define SOCK_PORT 124
 
 WiFiUDP UDP;
