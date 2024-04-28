@@ -183,6 +183,8 @@ void handleMessage(const char *message) {
         decodedProtocol = typeToString(results.decode_type);
         Serial.print("Received IR signal, protocol: ");
         Serial.println(decodedProtocol);
+        serialPrintUint64(results.value, HEX);
+        Serial.println("");
 
         // UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
         // UDP.print(decodedProtocol);
