@@ -1,36 +1,3 @@
-/*
- * IRremoteESP8266: IRrecvDumpV3 - dump details of IR codes with IRrecv
- * An IR detector/demodulator must be connected to the input kRecvPin.
- *
- * Copyright 2009 Ken Shirriff, http://arcfn.com
- * Copyright 2017-2019 David Conran
- *
- * Example circuit diagram:
- *  https://github.com/crankyoldgit/IRremoteESP8266/wiki#ir-receiving
- *
- * Changes:
- *   Version 1.2 October, 2020
- *     - Enable easy setting of the decoding tolerance value.
- *   Version 1.1 May, 2020
- *     - Create DumpV3 from DumpV2
- *     - Add OTA Base
- *   Version 1.0 October, 2019
- *     - Internationalisation (i18n) support.
- *     - Stop displaying the legacy raw timing info.
- *   Version 0.5 June, 2019
- *     - Move A/C description to IRac.cpp.
- *   Version 0.4 July, 2018
- *     - Minor improvements and more A/C unit support.
- *   Version 0.3 November, 2017
- *     - Support for A/C decoding for some protocols.
- *   Version 0.2 April, 2017
- *     - Decode from a copy of the data so we can start capturing faster thus
- *       reduce the likelihood of miscaptures.
- * Based on Ken Shirriff's IrsendDemo Version 0.1 July, 2009,
- */
-
-// Allow over air update
-// #define OTA_ENABLE true
 #include "BaseOTA.h"
 
 #include <Arduino.h>
@@ -163,19 +130,29 @@ void loop() {
   if (irrecv.decode(&results)) {
     // Display a crude timestamp.
     uint32_t now = millis();
+    // D_STR_TIMESTAMP "Timestamp"
     Serial.printf(D_STR_TIMESTAMP " : %06u.%03u\n", now / 1000, now % 1000);
+
     // Check if we got an IR message that was to big for our capture buffer.
+    // D_WARN_BUFFERFULL \ "WARNING: IR code is too big for buffer (>= %d). " \ "This result shouldn't be trusted until this is resolved. " \"Edit & increase `kCaptureBufferSize`."
     if (results.overflow)
       Serial.printf(D_WARN_BUFFERFULL "\n", kCaptureBufferSize);
+
     // Display the library version the message was captured with.
+    // D_STR_LIBRARY "Library"
     Serial.println(D_STR_LIBRARY "   : v" _IRREMOTEESP8266_VERSION_STR "\n");
+
     // Display the tolerance percentage if it has been change from the default.
+    // D_STR_TOLERANCE "Tolerance"
     if (kTolerancePercentage != kTolerance)
       Serial.printf(D_STR_TOLERANCE " : %d%%\n", kTolerancePercentage);
+
     // Display the basic output of what we found.
     Serial.print(resultToHumanReadableBasic(&results));
     // Display any extra A/C info if we have it.
     String description = IRAcUtils::resultAcToString(&results);
+
+    // D_STR_MESGDESC "Mesg Desc."
     if (description.length()) Serial.println(D_STR_MESGDESC ": " + description);
     yield();  // Feed the WDT as the text output can take a while to print.
 #if LEGACY_TIMING_INFO
@@ -184,9 +161,32 @@ void loop() {
     yield();  // Feed the WDT (again)
 #endif  // LEGACY_TIMING_INFO
     // Output the results as source code
-    Serial.println(resultToSourceCode(&results));
+    Serial.println(resultToSourceCode(&results)); // That what we need
     Serial.println();    // Blank line between entries
     yield();             // Feed the WDT (again)
   }
   OTAloopHandler();
 }
+
+// This code from IRuntils.h is used in this example.
+/* output += F("] = {");  // Start declaration
+
+  // Dump data
+  for (uint16_t i = 1; i < results->rawlen; i++) {
+    uint32_t usecs;
+    for (usecs = results->rawbuf[i] * kRawTick; usecs > UINT16_MAX;
+         usecs -= UINT16_MAX) {
+      output += uint64ToString(UINT16_MAX);
+      if (i % 2)
+        output += F(", 0,  ");
+      else
+        output += F(",  0, ");
+    }
+    output += uint64ToString(usecs, 10);
+    if (i < results->rawlen - 1)
+      output += kCommaSpaceStr;            // ',' not needed on the last one
+    if (i % 2 == 0) output += ' ';  // Extra if it was even.
+  }
+
+  // End declaration
+  output += F("};"); */
