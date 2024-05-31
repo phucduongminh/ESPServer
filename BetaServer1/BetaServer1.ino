@@ -111,7 +111,7 @@ void loop() {
     int len = UDP.read(packet, sizeof(packet) - 1);  // Leave space for null terminator
     packet[len] = '\0';                              // Null-terminate the received data
     Serial.println(String(packet));
-    //handleMessage(packet);
+    handleMessage(packet);
   };
   handleMessage("RECEIVE");
   Serial.println("Hello");
@@ -125,14 +125,21 @@ void startUdpServer() {
 }
 
 void handleMessage(const char *message) {
-  if (strcmp(message, "ESP-ACK") == 0) {
+  // Parse the received JSON object
+  DynamicJsonDocument doc(1024);
+  deserializeJson(doc, message);
+
+  // Access the command from the JSON object
+  const char* command = doc["command"];
+
+  if (strcmp(command, "ESP-ACK") == 0) {
     // Close old UDP socket server and begin new
     UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
     UDP.print(WiFi.localIP());
     UDP.endPacket();
-  } else if (strcmp(message, "CANCEL") == 0) {
+  } else if (strcmp(command, "CANCEL") == 0) {
     startUdpServer();  // Close old UDP socket server and begin new
-  } else if (strcmp(message, "SEND") == 0) {
+  } else if (strcmp(command, "SEND") == 0) {
     /*int remoteNameLen = UDP.read(packet, 255);
         if (remoteNameLen > 0)
         {
@@ -175,7 +182,7 @@ void handleMessage(const char *message) {
                 }*/
     }
     //}
-  } else if (strcmp(message, "RECEIVE") == 0) {
+  } else if (strcmp(command, "RECEIVE") == 0) {
     String decodedProtocol = "";
     while (decodedProtocol == "" || decodedProtocol == "UNKNOWN") {
       decode_results results;
@@ -205,12 +212,12 @@ void handleMessage(const char *message) {
       // 
       };
     }
-  } else if (strcmp(message, "ONAC") == 0) {
+  } else if (strcmp(command, "ONAC") == 0) {
     ac.next.power = true;  // We want to turn on the A/C unit.
     Serial.println("Sending a message to turn ON the A/C unit.");
     ac.sendAc();  // Have the IRac class create and send a message.
     //delay(5000);
-  } else if (strcmp(message, "OFFAC") == 0) {
+  } else if (strcmp(command, "OFFAC") == 0) {
     ac.next.power = false;  // We want to turn on the A/C unit.
     Serial.println("Sending a message to turn ON the A/C unit.");
     ac.sendAc();  // Have the IRac class create and send a message.
