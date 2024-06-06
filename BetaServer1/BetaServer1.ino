@@ -46,6 +46,7 @@ WiFiUDP UDP;
 //15 is GPIO15 and D15
 IRrecv irrecv(15, kCaptureBufferSize, kTimeout, true);  // Initialize IRrecv without capture buffer size (ESP32 doesn't require it)
 IRac ac(2);                                             // Adjust IR LED pin if needed  // Create a A/C object using GPIO to sending messages with.
+IRsend irsend(2);                                       // Set the GPIO to be used to sending the message.
 
 char packet[255];
 char reply[] = "Packet received!";
@@ -58,6 +59,9 @@ void startUdpServer();
 void handleMessage(const char* message);
 bool callAPI(const char* buttonId, const char* deviceId, uint16_t* rawData, uint16_t length);
 void receiveRaw(const char* device_id, const char* button_id);
+uint16_t* stringToRawData(String str, int length);
+bool getSignalData(const String& baseURL, const String& device_id, const String& button_id, int& length, uint16_t*& rawData);
+void sendRaw(const char* device_id, const char* button_id);
 
 void setup() {
   Serial.begin(115200);
@@ -81,7 +85,7 @@ void setup() {
 #endif                                        // DECODE_HASH
   irrecv.setTolerance(kTolerancePercentage);  // Override the default tolerance.
   irrecv.enableIRIn();                        // Start the receiver
-  //irsend.begin();
+  irsend.begin();
 
   // Set up what we want to send.
   // See state_t, opmode_t, fanspeed_t, swingv_t, & swingh_t in IRsend.h for
@@ -241,6 +245,17 @@ void handleMessage(const char* message) {
     } else {
       Serial.println("Error: Missing device_id or button_id in LEARN command.");
     }
+  } else if (strcmp(command, "SEND-LEARN") == 0) {
+    if (device_id && button_id) {  // Ensure both values are present
+      Serial.println("Received LEARN command.");
+      Serial.print("Device ID: ");
+      Serial.println(device_id);
+      Serial.print("Button ID: ");
+      Serial.println(button_id);
+      sendRaw(device_id, button_id);
+    } else {
+      Serial.println("Error: Missing device_id or button_id in LEARN command.");
+    }
   } else {
     // Unknown message type, handle appropriately (if needed)
     // ...
@@ -344,5 +359,85 @@ void receiveRaw(const char* device_id, const char* button_id) {
     }
     Serial.println();
     yield();
+  }
+}
+
+void sendRaw(const char* device_id, const char* button_id) {
+  int length;
+  uint16_t* rawData;
+  Serial.println("Start Fetch");
+  bool success = getSignalData(apiBaseURL, String(device_id), String(button_id), length, rawData);
+
+  if (success) {
+    UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+    UDP.print("SUC-SEND");
+    UDP.endPacket();
+    Serial.println("Raw from TestReceiveRaw");
+    irsend.sendRaw(rawData, length, 38);
+    Serial.println("Sent");
+  } else {
+    UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+    UDP.print("NETWORK-ERR");
+    UDP.endPacket();
+  }
+  delete[] rawData;  // Free memory after sending
+}
+
+uint16_t* stringToRawData(String str, int length) {
+  uint16_t* rawData = new uint16_t[length];
+  char* token = strtok((char*)str.c_str(), ", ");
+  for (int i = 0; token != NULL && i < length; i++) {
+    rawData[i] = (uint16_t)atoi(token);
+    token = strtok(NULL, ", ");
+  }
+  return rawData;
+}
+
+bool getSignalData(const String& baseURL, const String& device_id, const String& button_id, int& length, uint16_t*& rawData) {
+  if ((WiFi.status() == WL_CONNECTED)) {  //Check the current connection status
+    HTTPClient http;
+
+    String url = baseURL + "/api/signal/learns/getbyid?device_id=" + device_id + "&button_id=" + button_id;
+    http.begin(url.c_str());  //Specify the URL
+    int httpCode = http.GET();
+
+    // Print the HTTP status code
+    Serial.print("HTTP response status code: ");
+    Serial.println(httpCode);
+
+    if (httpCode > 0) {  //Check for the returning code
+      String payload = http.getString();
+      Serial.println(payload);
+
+      // Allocate the JsonDocument
+      DynamicJsonDocument doc(4096);
+
+      // Parse the JSON response
+      DeserializationError error = deserializeJson(doc, payload);
+
+      // Test if parsing succeeds.
+      if (error) {
+        Serial.print("deserializeJson() failed: ");
+        Serial.println(error.c_str());
+        return false;
+      }
+
+      // Get the values from the JSON document
+      length = doc["signal"]["rawdata_length"];
+      String rawDataString = doc["signal"]["rawdata"];
+
+      // Remove the curly braces from the rawDataString
+      rawDataString.remove(0, 1);                        // remove the first character
+      rawDataString.remove(rawDataString.length() - 1);  // remove the last character
+
+      // Convert the rawDataString to an array of uint16_t
+      rawData = stringToRawData(rawDataString, length);
+      return true;
+    } else {
+      Serial.println("Error on HTTP request");
+      return false;
+    }
+
+    http.end();  //Free the resources
   }
 }

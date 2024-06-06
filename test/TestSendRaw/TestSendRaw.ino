@@ -5,8 +5,8 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
-const char *ssid = "Tue Minh Vlog";
-const char *password = "wifichongtrom";
+const char *ssid = "";
+const char *password = "";
 String baseURL = "http://192.168.1.39:3001";
 String device_id = "myairphucdu";
 String button_id = "power-off";
