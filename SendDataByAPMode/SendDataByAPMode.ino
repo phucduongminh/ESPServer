@@ -29,8 +29,13 @@ void handlePost() {
       // In ra giá trị của wifiname và password
       Serial.println("Wifiname: " + wifiname);
       Serial.println("Password: " + password);
-      // Gửi trả về mã trạng thái 200, tức là thành công
-      server.send(200);
+      DynamicJsonDocument response(200);
+      response["status"] = "success";
+      response["local_ip"] = WiFi.localIP().toString();
+      String responseJson;
+      serializeJson(response, responseJson);
+      // Gửi dữ liệu JSON dưới dạng chuỗi
+      server.send(200, "application/json", responseJson);
     } else {
       // Ngược lại, gửi trả về mã trạng thái 400, tức là lỗi
       server.send(400);

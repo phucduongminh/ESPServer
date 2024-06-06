@@ -1,14 +1,16 @@
-#include <WiFi.h>               // For ESP32, use WiFi.h instead of ESP8266WiFi.h
+#include <WiFi.h>
 #include <WiFiUdp.h>
-#include <IRremoteESP8266.h>    // Use IRremoteESP8266 library, which also supports ESP32
+#include <IRremoteESP8266.h>
 #include <IRac.h>
 #include <IRrecv.h>
 #include <IRsend.h>
 #include <IRutils.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 
 #define UDP_PORT 12345
-#define SSID ""
-#define PASSWD ""
+#define SSID "Tue Minh Vlog"
+#define PASSWD "wifichongtrom"
 #define SOCK_PORT 124
 
 //#define IR_RECV_PIN 14 // GPIO5 (D5) for IR receiver
@@ -42,15 +44,24 @@ const uint8_t kTolerancePercentage = kTolerance;  // kTolerance is normally 25%
 // Use turn on the save buffer feature for more complete capture coverage.
 WiFiUDP UDP;
 //15 is GPIO15 and D15
-IRrecv irrecv(15);        // Initialize IRrecv without capture buffer size (ESP32 doesn't require it)
-IRac ac(15);            // Adjust IR LED pin if needed  // Create a A/C object using GPIO to sending messages with.
+IRrecv irrecv(15, kCaptureBufferSize, kTimeout, true);  // Initialize IRrecv without capture buffer size (ESP32 doesn't require it)
+IRac ac(2);                                             // Adjust IR LED pin if needed  // Create a A/C object using GPIO to sending messages with.
+IRsend irsend(2);                                       // Set the GPIO to be used to sending the message.
 
 char packet[255];
 char reply[] = "Packet received!";
+const char* apiBaseURL = "http://192.168.1.39:3001";  // Replace with your actual API URL
+// const char* buttonId = "";
+// const char* deviceId = "";
 
 // Function prototypes
 void startUdpServer();
-void handleMessage(const char *message);
+void handleMessage(const char* message);
+bool callAPI(const char* buttonId, const char* deviceId, uint16_t* rawData, uint16_t length);
+void receiveRaw(const char* device_id, const char* button_id);
+uint16_t* stringToRawData(String str, int length);
+bool getSignalData(const String& baseURL, const String& device_id, const String& button_id, int& length, uint16_t*& rawData);
+void sendRaw(const char* device_id, const char* button_id);
 
 void setup() {
   Serial.begin(115200);
@@ -74,12 +85,12 @@ void setup() {
 #endif                                        // DECODE_HASH
   irrecv.setTolerance(kTolerancePercentage);  // Override the default tolerance.
   irrecv.enableIRIn();                        // Start the receiver
-  //irsend.begin();
+  irsend.begin();
 
   // Set up what we want to send.
   // See state_t, opmode_t, fanspeed_t, swingv_t, & swingh_t in IRsend.h for
   // all the various options.
-  ac.next.protocol = decode_type_t::COOLIX;      // Set a protocol to use.
+  //ac.next.protocol = decode_type_t::COOLIX;      // Set a protocol to use.
   // ac.next.model = 2;                              // Some A/Cs have different models. Try just the first.
   // ac.next.mode = stdAc::opmode_t::kCool;          // Run in cool mode initially.
   // ac.next.celsius = true;                         // Use Celsius for temp units. False = Fahrenheit
@@ -96,7 +107,7 @@ void setup() {
   // ac.next.sleep = -1;                             // Don't set any sleep time or modes.
   // ac.next.clean = false;                          // Turn off any Cleaning options if we can.
   // ac.next.clock = -1;                             // Don't set any current time if we can avoid it.
-  ac.next.power = true;                          // Initially start with the unit off.
+  ac.next.power = true;  // Initially start with the unit off.
 
   Serial.println("Try to turn on & off every supported A/C type ...");
 }
@@ -111,10 +122,10 @@ void loop() {
     int len = UDP.read(packet, sizeof(packet) - 1);  // Leave space for null terminator
     packet[len] = '\0';                              // Null-terminate the received data
     Serial.println(String(packet));
-    //handleMessage(packet);
+    handleMessage(packet);
   };
-  handleMessage("RECEIVE");
-  Serial.println("Hello");
+  // handleMessage("RECEIVE");
+  delay(500);
 }
 
 void startUdpServer() {
@@ -124,15 +135,24 @@ void startUdpServer() {
   Serial.println(UDP_PORT);
 }
 
-void handleMessage(const char *message) {
-  if (strcmp(message, "ESP-ACK") == 0) {
+void handleMessage(const char* message) {
+  // Parse the received JSON object
+  DynamicJsonDocument doc(1024);
+  deserializeJson(doc, message);
+
+  // Access the command from the JSON object
+  const char* command = doc["command"];
+  const char* device_id = doc["device_id"];
+  const char* button_id = doc["button_id"];
+
+  if (strcmp(command, "ESP-ACK") == 0) {
     // Close old UDP socket server and begin new
     UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
     UDP.print(WiFi.localIP());
     UDP.endPacket();
-  } else if (strcmp(message, "CANCEL") == 0) {
+  } else if (strcmp(command, "CANCEL") == 0) {
     startUdpServer();  // Close old UDP socket server and begin new
-  } else if (strcmp(message, "SEND") == 0) {
+  } else if (strcmp(command, "SEND") == 0) {
     /*int remoteNameLen = UDP.read(packet, 255);
         if (remoteNameLen > 0)
         {
@@ -175,7 +195,7 @@ void handleMessage(const char *message) {
                 }*/
     }
     //}
-  } else if (strcmp(message, "RECEIVE") == 0) {
+  } else if (strcmp(command, "RECEIVE") == 0) {
     String decodedProtocol = "";
     while (decodedProtocol == "" || decodedProtocol == "UNKNOWN") {
       decode_results results;
@@ -186,9 +206,9 @@ void handleMessage(const char *message) {
         serialPrintUint64(results.value, HEX);
         Serial.println("");
 
-        // UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
-        // UDP.print(decodedProtocol);
-        // UDP.endPacket();
+        UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+        UDP.print(decodedProtocol);
+        UDP.endPacket();
         irrecv.resume();
 
         if (ac.isProtocolSupported(results.decode_type)) {
@@ -196,27 +216,228 @@ void handleMessage(const char *message) {
           ac.next.protocol = results.decode_type;  // Change the protocol used.
           delay(100);
         };
-      // } else {
-      //   // No IR data received yet, wait and try again
-      //   UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
-      //   UDP.print("WAIT");
-      //   UDP.endPacket();
-      //   delay(100);
-      // 
+      } else {
+        // No IR data received yet, wait and try again
+        UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+        UDP.print("WAIT");
+        UDP.endPacket();
+        delay(100);
       };
     }
-  } else if (strcmp(message, "ONAC") == 0) {
+  } else if (strcmp(command, "ONAC") == 0) {
     ac.next.power = true;  // We want to turn on the A/C unit.
     Serial.println("Sending a message to turn ON the A/C unit.");
     ac.sendAc();  // Have the IRac class create and send a message.
     //delay(5000);
-  } else if (strcmp(message, "OFFAC") == 0) {
+  } else if (strcmp(command, "OFFAC") == 0) {
     ac.next.power = false;  // We want to turn on the A/C unit.
     Serial.println("Sending a message to turn ON the A/C unit.");
     ac.sendAc();  // Have the IRac class create and send a message.
     //delay(5000);
+  } else if (strcmp(command, "LEARN") == 0) {
+    if (device_id && button_id) {  // Ensure both values are present
+      Serial.println("Received LEARN command.");
+      Serial.print("Device ID: ");
+      Serial.println(device_id);
+      Serial.print("Button ID: ");
+      Serial.println(button_id);
+      receiveRaw(device_id, button_id);
+    } else {
+      Serial.println("Error: Missing device_id or button_id in LEARN command.");
+    }
+  } else if (strcmp(command, "SEND-LEARN") == 0) {
+    if (device_id && button_id) {  // Ensure both values are present
+      Serial.println("Received LEARN command.");
+      Serial.print("Device ID: ");
+      Serial.println(device_id);
+      Serial.print("Button ID: ");
+      Serial.println(button_id);
+      sendRaw(device_id, button_id);
+    } else {
+      Serial.println("Error: Missing device_id or button_id in LEARN command.");
+    }
   } else {
     // Unknown message type, handle appropriately (if needed)
     // ...
+  }
+}
+
+bool callAPI(const char* buttonId, const char* deviceId, uint16_t* rawData, uint16_t length) {
+  // Convert raw data to JSON string
+  DynamicJsonDocument doc(1024);  // Adjust capacity if needed
+  JsonArray rawDataArray = doc.createNestedArray("rawdata");
+  for (uint16_t i = 0; i < length; i++) {
+    rawDataArray.add(rawData[i]);
+  }
+  String rawDataJson;
+  serializeJson(doc, rawDataJson);
+
+  // Send data to API
+  HTTPClient http;
+  String route = "/api/signal/learns/new";
+  http.begin(apiBaseURL + route);
+  http.addHeader("Content-Type", "application/json");
+
+  String payload = "{";
+  payload += "\"button_id\":\"" + String(buttonId) + "\",";
+  payload += "\"device_id\":\"" + String(deviceId) + "\",";
+  payload += "\"rawdata_length\":" + String(length) + ",";
+  payload += "\"rawdata\":" + rawDataJson;
+  payload += "}";
+
+  int httpResponseCode = http.POST(payload);
+
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.println(httpResponseCode);
+    Serial.println(response);
+    return true;
+  } else {
+    Serial.printf("Error sending POST: %d\n", httpResponseCode);
+    return false;
+  }
+  http.end();
+}
+
+void receiveRaw(const char* device_id, const char* button_id) {
+  static int signalCounter = 0;
+  decode_results results;
+  if (irrecv.decode(&results)) {
+    signalCounter++;
+    Serial.println();
+    if (signalCounter == 1) {
+      // Convert raw data to JSON string
+      uint16_t* rawData = resultToRawData(&results);
+      const uint16_t length = getCorrectedRawLength(&results);
+      DynamicJsonDocument doc(1024);  // Adjust capacity if needed
+      JsonArray rawDataArray = doc.createNestedArray("rawdata");
+      for (uint16_t i = 0; i < length; i++) {
+        rawDataArray.add(rawData[i]);
+      }
+      String rawDataJson;
+      serializeJson(doc, rawDataJson);
+
+      Serial.printf("rawData[%d] = %s\n", (int)length, rawDataJson.c_str());
+      if (ac.isProtocolSupported(results.decode_type)) {
+        UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+        UDP.print("PRO");
+        UDP.endPacket();
+        bool success = callAPI(button_id, device_id, rawData, length);
+        if (success) {
+          UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+          UDP.print("SUC-PRO");
+          UDP.endPacket();
+        } else {
+          UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+          UDP.print("NETWORK-ERR");
+          UDP.endPacket();
+        }
+      } else if (length > 1000) {
+        UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+        UDP.print("LEARN-FAIL");
+        UDP.endPacket();
+      } else {
+        UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+        UDP.print("SUC-NOPRO");
+        UDP.endPacket();
+        bool success = callAPI(button_id, device_id, rawData, length);
+        if (success) {
+          UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+          UDP.print("SUC-NOPRO");
+          UDP.endPacket();
+        } else {
+          UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+          UDP.print("NETWORK-ERR");
+          UDP.endPacket();
+        }
+      }
+
+      irrecv.resume();
+
+      delete[] rawData;
+      signalCounter = 0;
+    }
+    Serial.println();
+    yield();
+  }
+}
+
+void sendRaw(const char* device_id, const char* button_id) {
+  int length;
+  uint16_t* rawData;
+  Serial.println("Start Fetch");
+  bool success = getSignalData(apiBaseURL, String(device_id), String(button_id), length, rawData);
+
+  if (success) {
+    UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+    UDP.print("SUC-SEND");
+    UDP.endPacket();
+    Serial.println("Raw from TestReceiveRaw");
+    irsend.sendRaw(rawData, length, 38);
+    Serial.println("Sent");
+  } else {
+    UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+    UDP.print("NETWORK-ERR");
+    UDP.endPacket();
+  }
+  delete[] rawData;  // Free memory after sending
+}
+
+uint16_t* stringToRawData(String str, int length) {
+  uint16_t* rawData = new uint16_t[length];
+  char* token = strtok((char*)str.c_str(), ", ");
+  for (int i = 0; token != NULL && i < length; i++) {
+    rawData[i] = (uint16_t)atoi(token);
+    token = strtok(NULL, ", ");
+  }
+  return rawData;
+}
+
+bool getSignalData(const String& baseURL, const String& device_id, const String& button_id, int& length, uint16_t*& rawData) {
+  if ((WiFi.status() == WL_CONNECTED)) {  //Check the current connection status
+    HTTPClient http;
+
+    String url = baseURL + "/api/signal/learns/getbyid?device_id=" + device_id + "&button_id=" + button_id;
+    http.begin(url.c_str());  //Specify the URL
+    int httpCode = http.GET();
+
+    // Print the HTTP status code
+    Serial.print("HTTP response status code: ");
+    Serial.println(httpCode);
+
+    if (httpCode > 0) {  //Check for the returning code
+      String payload = http.getString();
+      Serial.println(payload);
+
+      // Allocate the JsonDocument
+      DynamicJsonDocument doc(4096);
+
+      // Parse the JSON response
+      DeserializationError error = deserializeJson(doc, payload);
+
+      // Test if parsing succeeds.
+      if (error) {
+        Serial.print("deserializeJson() failed: ");
+        Serial.println(error.c_str());
+        return false;
+      }
+
+      // Get the values from the JSON document
+      length = doc["signal"]["rawdata_length"];
+      String rawDataString = doc["signal"]["rawdata"];
+
+      // Remove the curly braces from the rawDataString
+      rawDataString.remove(0, 1);                        // remove the first character
+      rawDataString.remove(rawDataString.length() - 1);  // remove the last character
+
+      // Convert the rawDataString to an array of uint16_t
+      rawData = stringToRawData(rawDataString, length);
+      return true;
+    } else {
+      Serial.println("Error on HTTP request");
+      return false;
+    }
+
+    http.end();  //Free the resources
   }
 }
