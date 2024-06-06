@@ -7,8 +7,8 @@
 #include <IRutils.h>
 #include <HTTPClient.h>
 
-const char *ssid = "Tue Minh Vlog";
-const char *password = "wifichongtrom";
+const char *ssid = "";
+const char *password = "";
 
 #ifdef ARDUINO_ESP32C3_DEV
 const uint16_t kRecvPin = 10;  // 14 on a ESP32-C3 causes a boot loop.
@@ -129,7 +129,7 @@ void loop() {
       const uint16_t length = getCorrectedRawLength(&results);
       String str = rawDataToString(rawData, length);
       Serial.printf("rawData[%d] = %s\n", (int)length, str.c_str());  // Print the raw data
-      callAPI("http://192.168.1.39:3001", "power", "myairphucdu", (int)length, str);
+      callAPI("http://192.168.100.39:3001", "power", "myairphucdu", (int)length, str);
       delete[] rawData;
 
       signalCounter = 0;  // Reset the counter

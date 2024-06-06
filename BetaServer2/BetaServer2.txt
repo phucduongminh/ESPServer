@@ -1,0 +1,202 @@
+Merging Bluetooth and UDP Communication in ESP32 Server
+Here's how you can merge the Bluetooth and UDP communication code from the provided files into your ESP32 server code:
+
+1. Include necessary libraries:
+
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <IRremoteESP8266.h>
+#include <IRac.h>
+#include <IRrecv.h>
+#include <IRsend.h>
+#include <IRutils.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+2. Define constants and variables:
+
+// UDP constants
+#define UDP_PORT 12345
+#define SSID ""
+#define PASSWD ""
+
+// Bluetooth constants
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define MESSAGE_CHARACTERISTIC_UUID "6d68efe5-04b6-4a85-abc4-c2670b7bf7fd"
+#define BOX_CHARACTERISTIC_UUID "f27b53ad-c63d-49a0-8c0f-9f297e6cc520"
+
+// IR constants
+#define IR_LED_PIN 15
+#define IR_RECV_PIN 14
+
+// Global variables
+WiFiUDP UDP;
+IRrecv irrecv(IR_RECV_PIN);
+IRac ac(IR_LED_PIN);
+BLEServer *pServer = NULL;
+BLECharacteristic *message_characteristic = NULL;
+BLECharacteristic *box_characteristic = NULL;
+String boxValue = "0";
+[1][2] Use code with care. Learn more
+3. Implement setup function:
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  // Connect to WiFi
+  WiFi.begin(SSID, PASSWD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(100);
+  }
+  Serial.println("Connected to WiFi");
+
+  // Start UDP server
+  UDP.begin(UDP_PORT);
+  Serial.print("UDP server started on port: ");
+  Serial.println(UDP_PORT);
+
+  // Initialize IR receiver and sender
+  irrecv.enableIRIn();
+  ac.begin();
+
+  // Initialize Bluetooth server
+  BLEDevice::init("ESP32Server");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  message_characteristic = pService->createCharacteristic(
+    MESSAGE_CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ | 
+    BLECharacteristic::PROPERTY_WRITE | 
+    BLECharacteristic::PROPERTY_NOTIFY | 
+    BLECharacteristic::PROPERTY_INDICATE
+  );
+  box_characteristic = pService->createCharacteristic(
+    BOX_CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ | 
+    BLECharacteristic::PROPERTY_WRITE | 
+    BLECharacteristic::PROPERTY_NOTIFY | 
+    BLECharacteristic::PROPERTY_INDICATE
+  );
+  pService->start();
+  pServer->getAdvertising()->start();
+  message_characteristic->setValue("ESP32");
+  box_characteristic->notify();
+  message_characteristic->setCallbacks(new CharacteristicsCallbacks());
+  box_characteristic->setValue("0");
+  box_characteristic->setCallbacks(new CharacteristicsCallbacks());
+  Serial.println("Bluetooth server started");
+}
+[3][4][5][6][7][8] Use code with care. Learn more
+4. Implement loop function:
+
+void loop() {
+  // Check for UDP packets
+  int packetSize = UDP.parsePacket();
+  if (packetSize) {
+    handleUdpPacket(packetSize);
+  }
+
+  // Check for Bluetooth messages
+  handleBluetoothMessage();
+
+  // Check for IR signals
+  handleIrSignal();
+}
+5. Implement helper functions:
+
+void handleUdpPacket(int packetSize) {
+  char packet[255];
+  int len = UDP.read(packet, sizeof(packet) - 1);
+  packet[len] = '\0';
+  Serial.println(String(packet));
+  handleMessage(packet);
+}
+
+void handleBluetoothMessage() {
+  // Implement logic to read and handle messages from Bluetooth characteristic
+}
+
+void handleIrSignal() {
+  decode_results results;
+  if (irrecv.decode(&results)) {
+    Serial.print("Received IR signal, protocol: ");
+    Serial.println(typeToString(results.decode_type));
+    serialPrintUint64(results.value, HEX);
+    Serial.println("");
+    irrecv.resume();
+  }
+}
+
+void handleMessage(const char *message) {
+  // Parse the received JSON object
+  DynamicJsonDocument doc(1024);
+  deserializeJson(doc, message);
+
+  // Access the command from the JSON object
+  const char* command = doc["command"];
+
+  // Handle different commands
+  if (strcmp(command, "ESP-ACK") == 0) {
+    // Send IP address to client
+    UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+    UDP.print(WiFi.localIP());
+    UDP.endPacket();
+  } else if (strcmp(command, "CANCEL") == 0) {
+    // Restart UDP server
+    UDP.stop();
+    UDP.begin(UDP_PORT);
+  } else if (strcmp(command, "SEND") == 0) {
+    // Send IR code
+    // ...
+  } else if (strcmp(command, "RECEIVE") == 0) {
+    // Receive IR code
+    // ...
+  } else if (strcmp(command, "ONAC") == 0) {
+    // Turn on AC
+    ac.next.power = true;
+    ac.sendAc();
+  } else if (strcmp(command, "OFFAC") == 0) {
+    // Turn off AC
+    ac.next.power = false;
+    ac.sendAc();
+  } else {
+    // Unknown command
+    // ...
+  }
+}
+6. Implement MyServerCallbacks and CharacteristicsCallbacks classes:
+
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *pServer) {
+    Serial.println("Connected");
+  };
+
+  void onDisconnect(BLEServer *pServer) {
+    Serial.println("Disconnected");
+    pServer->startAdvertising();
+  }
+};
+
+class CharacteristicsCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) {
+    Serial.println(pCharacteristic->getValue().c_str());
+
+    if (pCharacteristic == box_characteristic) {
+      boxValue = pCharacteristic->getValue().c_str();
+      box_characteristic->setValue(const_cast<char *>(boxValue.c_str()));
+      box_characteristic->notify();
+    }
+  }
+};
+[9][10][11] Use code with care. Learn more
+7. Add button functionality:
+
+// Add buttons to your UI to switch between UDP and Bluetooth communication
+// Implement logic to handle button presses and set appropriate flags
+8. Test and debug:
+
+Test your code thoroughly to ensure it works as expected for both UDP and Bluetooth communication. Use the Serial monitor to print debug messages and identify any issues.
+
+This is a basic example of how to merge the provided code. You may need to modify it based on your specific requirements and the functionality you want to implement.
