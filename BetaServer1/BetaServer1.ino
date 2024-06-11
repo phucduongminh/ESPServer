@@ -9,8 +9,8 @@
 #include <ArduinoJson.h>
 
 #define UDP_PORT 12345
-#define SSID "Tue Minh Vlog"
-#define PASSWD "wifichongtrom"
+#define SSID ""
+#define PASSWD ""
 #define SOCK_PORT 124
 
 //#define IR_RECV_PIN 14 // GPIO5 (D5) for IR receiver
@@ -46,11 +46,11 @@ WiFiUDP UDP;
 //15 is GPIO15 and D15
 IRrecv irrecv(15, kCaptureBufferSize, kTimeout, true);  // Initialize IRrecv without capture buffer size (ESP32 doesn't require it)
 IRac ac(2);                                             // Adjust IR LED pin if needed  // Create a A/C object using GPIO to sending messages with.
-IRsend irsend(2);                                       // Set the GPIO to be used to sending the message.
+IRsend irsend(4);                                       // Set the GPIO to be used to sending the message.
 
 char packet[255];
 char reply[] = "Packet received!";
-const char* apiBaseURL = "http://192.168.1.39:3001";  // Replace with your actual API URL
+const char* apiBaseURL = "http://192.168.1.15:3001";  // Replace with your actual API URL
 // const char* buttonId = "";
 // const char* deviceId = "";
 
@@ -64,6 +64,7 @@ bool getSignalData(const String& baseURL, const String& device_id, const String&
 void sendRaw(const char* device_id, const char* button_id);
 bool getSignalDataForVoice(const String& baseURL, int user_id, const String& button_id, int& length, uint16_t*& rawData);
 void sendRawForVoice(int user_id, const char* button_id);
+String rawDataToString(uint16_t* rawData, uint16_t length);
 
 void setup() {
   Serial.begin(115200);
@@ -92,24 +93,23 @@ void setup() {
   // Set up what we want to send.
   // See state_t, opmode_t, fanspeed_t, swingv_t, & swingh_t in IRsend.h for
   // all the various options.
-  //ac.next.protocol = decode_type_t::COOLIX;      // Set a protocol to use.
-  // ac.next.model = 2;                              // Some A/Cs have different models. Try just the first.
-  // ac.next.mode = stdAc::opmode_t::kCool;          // Run in cool mode initially.
-  // ac.next.celsius = true;                         // Use Celsius for temp units. False = Fahrenheit
-  // ac.next.degrees = 28;                           // 25 degrees.
-  // ac.next.fanspeed = stdAc::fanspeed_t::kMedium;  // Start the fan at medium.
-  // ac.next.swingv = stdAc::swingv_t::kOff;         // Don't swing the fan up or down.
-  // ac.next.swingh = stdAc::swingh_t::kOff;         // Don't swing the fan left or right.
-  // ac.next.light = false;                          // Turn off any LED/Lights/Display that we can.
-  // ac.next.beep = false;                           // Turn off any beep from the A/C if we can.
-  // ac.next.econo = false;                          // Turn off any economy modes if we can.
-  // ac.next.filter = false;                         // Turn off any Ion/Mold/Health filters if we can.
-  // ac.next.turbo = false;                          // Don't use any turbo/powerful/etc modes.
-  // ac.next.quiet = false;                          // Don't use any quiet/silent/etc modes.
-  // ac.next.sleep = -1;                             // Don't set any sleep time or modes.
-  // ac.next.clean = false;                          // Turn off any Cleaning options if we can.
-  // ac.next.clock = -1;                             // Don't set any current time if we can avoid it.
-  ac.next.power = true;  // Initially start with the unit off.
+  //ac.next.protocol      // Set a protocol to use.
+  ac.next.model = 2;                              // Some A/Cs have different models. Try just the first.
+  ac.next.mode = stdAc::opmode_t::kCool;          // Run in cool mode initially.
+  ac.next.celsius = true;                         // Use Celsius for temp units. False = Fahrenheit
+  ac.next.degrees = 28;                          // 25 degrees.
+  ac.next.fanspeed = stdAc::fanspeed_t::kMedium;  // Start the fan at medium.
+  ac.next.swingv = stdAc::swingv_t::kOff;         // Don't swing the fan up or down.
+  ac.next.swingh = stdAc::swingh_t::kOff;         // Don't swing the fan left or right.
+  ac.next.light = false;                          // Turn off any LED/Lights/Display that we can.
+  ac.next.beep = false;                           // Turn off any beep from the A/C if we can.
+  ac.next.econo = false;                          // Turn off any economy modes if we can.
+  ac.next.filter = false;                         // Turn off any Ion/Mold/Health filters if we can.
+  ac.next.turbo = false;                          // Don't use any turbo/powerful/etc modes.
+  ac.next.quiet = false;                          // Don't use any quiet/silent/etc modes.
+  ac.next.sleep = -1;                             // Don't set any sleep time or modes.
+  ac.next.clean = false;                          // Turn off any Cleaning options if we can.
+  ac.next.clock = -1;                             // Don't set any current time if we can avoid it.
 
   Serial.println("Try to turn on & off every supported A/C type ...");
 }
@@ -178,13 +178,13 @@ void handleMessage(const char* message) {
         if (hexCode == "CLOSE") {
           break;  // Break while loop if "CLOSE" received
         }
-        if (strcmp(packet, "ONAC") == 0) {
+        if (strcmp(packet, "ON-AC") == 0) {
           ac.next.power = true;  // We want to turn on the A/C unit.
           Serial.println("Sending a message to turn ON the A/C unit.");
           ac.sendAc();  // Have the IRac class create and send a message.
           delay(5000);
         }
-        if (hexCode == "OFFAC") {
+        if (hexCode == "OFF-AC") {
           ac.next.power = false;  // We want to turn on the A/C unit.
           Serial.println("Sending a message to turn ON the A/C unit.");
           ac.sendAc();  // Have the IRac class create and send a message.
@@ -218,6 +218,7 @@ void handleMessage(const char* message) {
         if (ac.isProtocolSupported(results.decode_type)) {
           Serial.println("Protocol " + String(results.decode_type) + " / " + decodedProtocol + " is supported.");
           ac.next.protocol = results.decode_type;  // Change the protocol used.
+          //ac.next.degrees = 28;
           delay(100);
         };
       } else {
@@ -239,6 +240,8 @@ void handleMessage(const char* message) {
         Serial.println("Error: Missing device_id or button_id in LEARN command.");
       }
     } else {
+      //ac.next.protocol = decode_type_t::DAIKIN216;
+      //ac.next.degrees = 28;
       ac.next.power = true;  // We want to turn on the A/C unit.
       Serial.println("Sending a message to turn ON the A/C unit.");
       ac.sendAc();  // Have the IRac class create and send a message.
@@ -255,8 +258,10 @@ void handleMessage(const char* message) {
         Serial.println("Error: Missing device_id or button_id in LEARN command.");
       }
     } else {
+      //ac.next.protocol = decode_type_t::DAIKIN216;
+      //ac.next.degrees = 28;
       ac.next.power = false;  // We want to turn on the A/C unit.
-      Serial.println("Sending a message to turn ON the A/C unit.");
+      Serial.println("Sending a message to turn OFF the A/C unit.");
       ac.sendAc();  // Have the IRac class create and send a message.
     }
     //delay(5000);
@@ -288,15 +293,22 @@ void handleMessage(const char* message) {
   }
 }
 
+String rawDataToString(uint16_t* rawData, uint16_t length) {
+  String str = "{";
+  for (uint16_t i = 0; i < length; i++) {
+    str += String(rawData[i]);
+    if (i < length - 1) {
+      str += ", ";
+    }
+  }
+  str += "}";
+  return str;
+}
+
 bool callAPI(const char* buttonId, const char* deviceId, uint16_t* rawData, uint16_t length) {
   // Convert raw data to JSON string
-  DynamicJsonDocument doc(1024);  // Adjust capacity if needed
-  JsonArray rawDataArray = doc.createNestedArray("rawdata");
-  for (uint16_t i = 0; i < length; i++) {
-    rawDataArray.add(rawData[i]);
-  }
-  String rawDataJson;
-  serializeJson(doc, rawDataJson);
+  String str = rawDataToString(rawData, length);
+
 
   // Send data to API
   HTTPClient http;
@@ -308,7 +320,7 @@ bool callAPI(const char* buttonId, const char* deviceId, uint16_t* rawData, uint
   payload += "\"button_id\":\"" + String(buttonId) + "\",";
   payload += "\"device_id\":\"" + String(deviceId) + "\",";
   payload += "\"rawdata_length\":" + String(length) + ",";
-  payload += "\"rawdata\":" + rawDataJson;
+  payload += "\"rawdata\":\"" + str + "\"";
   payload += "}";
 
   int httpResponseCode = http.POST(payload);

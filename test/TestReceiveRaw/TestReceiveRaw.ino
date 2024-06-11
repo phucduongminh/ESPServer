@@ -7,8 +7,8 @@
 #include <IRutils.h>
 #include <HTTPClient.h>
 
-const char *ssid = "";
-const char *password = "";
+const char *ssid = "Indroid";
+const char *password = "12345678w";
 
 #ifdef ARDUINO_ESP32C3_DEV
 const uint16_t kRecvPin = 10;  // 14 on a ESP32-C3 causes a boot loop.
