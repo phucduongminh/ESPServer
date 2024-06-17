@@ -7,10 +7,9 @@
 #include <IRutils.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <WebServer.h>
 
 #define UDP_PORT 12345
-#define SSID ""
-#define PASSWD ""
 #define SOCK_PORT 124
 
 //#define IR_RECV_PIN 14 // GPIO5 (D5) for IR receiver
@@ -30,29 +29,23 @@ const uint8_t kTimeout = 15;
 #endif  // DECODE_AC
 
 const uint16_t kMinUnknownSize = 12;
-
 const uint16_t kCaptureBufferSize = 1024;
-
 const uint8_t kTolerancePercentage = kTolerance;  // kTolerance is normally 25%
-
-// Legacy (No longer supported!)
-//
-// Change to `true` if you miss/need the old "Raw Timing[]" display.
 #define LEGACY_TIMING_INFO false
-// ==================== end of TUNEABLE PARAMETERS ====================
 
-// Use turn on the save buffer feature for more complete capture coverage.
 WiFiUDP UDP;
-//15 is GPIO15 and D15
 IRrecv irrecv(15, kCaptureBufferSize, kTimeout, true);  // Initialize IRrecv without capture buffer size (ESP32 doesn't require it)
-IRac ac(2);                                             // Adjust IR LED pin if needed  // Create a A/C object using GPIO to sending messages with.
+IRac ac(2);                                             // Adjust IR LED pin if needed
 IRsend irsend(4);                                       // Set the GPIO to be used to sending the message.
 
 char packet[255];
-char reply[] = "Packet received!";
-const char* apiBaseURL = "http://192.168.1.15:3001";  // Replace with your actual API URL
-// const char* buttonId = "";
-// const char* deviceId = "";
+const char* apiBaseURL = "http://192.168.1.39:3001";  // Replace with your actual API URL
+
+// WiFi Access Point credentials
+const char* ap_ssid = "ESP32_AP";
+const char* ap_password = "12345678";
+WebServer server(80);
+bool serverRunning = true;
 
 // Function prototypes
 void startUdpServer();
@@ -65,14 +58,73 @@ void sendRaw(const char* device_id, const char* button_id);
 bool getSignalDataForVoice(const String& baseURL, int user_id, const String& button_id, int& length, uint16_t*& rawData);
 void sendRawForVoice(int user_id, const char* button_id);
 String rawDataToString(uint16_t* rawData, uint16_t length);
+void setupAPAndConnectToWiFi();
+void handlePost();
+
+// Function to setup the ESP32 as an access point and handle WiFi credentials
+void setupAPAndConnectToWiFi() {
+  WiFi.softAP(ap_ssid, ap_password);
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+  server.on("/post", HTTP_POST, handlePost);
+  server.begin();
+
+  while (serverRunning) {
+    server.handleClient();
+    delay(10);
+  }
+}
+
+// Function to handle HTTP POST requests for WiFi credentials
+void handlePost() {
+  if (server.hasArg("plain")) {
+    String data = server.arg("plain");
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, data);
+    if (!error) {
+      String wifiname = doc["wifiname"];
+      String password = doc["password"];
+      Serial.println("Wifiname: " + wifiname);
+      Serial.println("Password: " + password);
+
+      WiFi.begin(wifiname.c_str(), password.c_str());
+      int attempts = 0;
+      while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+      }
+
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Connected to WiFi!");
+        Serial.print("IP address: ");
+        Serial.println(WiFi.localIP());
+
+        DynamicJsonDocument response(200);
+        response["status"] = "success";
+        response["local_ip"] = WiFi.localIP().toString();
+        String responseJson;
+        serializeJson(response, responseJson);
+        server.send(200, "application/json", responseJson);
+        server.stop();
+        serverRunning = false;
+        return;
+      } else {
+        server.send(400, "application/json", "{\"status\":\"failure\",\"message\":\"Failed to connect to WiFi\"}");
+      }
+    } else {
+      server.send(400, "application/json", "{\"status\":\"failure\",\"message\":\"Invalid JSON Request\"}");
+    }
+  } else {
+    server.send(500, "application/json", "{\"status\":\"failure\",\"message\":\"No data received\"}");
+  }
+}
 
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  WiFi.begin(SSID, PASSWD);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(100);
-  }
+  setupAPAndConnectToWiFi();  // Call the new function to setup AP and connect to WiFi
 
   Serial.println("");
   Serial.print("IP: ");
@@ -126,7 +178,6 @@ void loop() {
     Serial.println(String(packet));
     handleMessage(packet);
   };
-  // handleMessage("RECEIVE");
   delay(500);
 }
 
@@ -293,7 +344,6 @@ void handleMessage(const char* message) {
     // ...
   }
 }
-
 
 // Function to convert raw data to a string
 String rawDataToString(uint16_t* rawData, uint16_t length) {
