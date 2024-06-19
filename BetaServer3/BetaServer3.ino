@@ -8,44 +8,53 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
+#include <RTClib.h>
+#include <EEPROM.h>
+#include <Wire.h>
 
 #define UDP_PORT 12345
 #define SOCK_PORT 124
+#define EEPROM_SIZE 512
 
-// #define IR_RECV_PIN 14 // GPIO5 (D5) for IR receiver
-#define IR_LED_PIN 15 // GPIO4 (D2) for IR LED
+#define IR_LED_PIN 15
 #ifdef ARDUINO_ESP32C3_DEV
-const uint16_t kRecvPin = 10; // 14 on a ESP32-C3 causes a boot loop.
-#else                         // ARDUINO_ESP32C3_DEV
+const uint16_t kRecvPin = 10;
+#else
 const uint16_t kRecvPin = 14;
-#endif                        // ARDUINO_ESP32C3_DEV
+#endif
 #if DECODE_AC
-// Some A/C units have gaps in their protocols of ~40ms. e.g. Kelvinator
-// A value this large may swallow repeats of some protocols
 const uint8_t kTimeout = 50;
-#else  // DECODE_AC
-// Suits most messages, while not swallowing many repeats.
+#else
 const uint8_t kTimeout = 15;
-#endif // DECODE_AC
+#endif
 
 const uint16_t kMinUnknownSize = 12;
 const uint16_t kCaptureBufferSize = 1024;
-const uint8_t kTolerancePercentage = kTolerance; // kTolerance is normally 25%
-#define LEGACY_TIMING_INFO false
+const uint8_t kTolerancePercentage = kTolerance;
 
 WiFiUDP UDP;
-IRrecv irrecv(15, kCaptureBufferSize, kTimeout, true); // Initialize IRrecv without capture buffer size (ESP32 doesn't require it)
-IRac ac(2);                                            // Adjust IR LED pin if needed
-IRsend irsend(4);                                      // Set the GPIO to be used to sending the message.
+IRrecv irrecv(15, kCaptureBufferSize, kTimeout, true);
+IRac ac(2);
+IRsend irsend(4);
 
 char packet[255];
-const char *apiBaseURL = "http://192.168.1.39:3001"; // Replace with your actual API URL
+const char *apiBaseURL = "http://192.168.1.39:3001";
 
-// WiFi Access Point credentials
 const char *ap_ssid = "ESP32_AP";
 const char *ap_password = "12345678";
 WebServer server(80);
 bool serverRunning = true;
+
+RTC_DS3231 rtc;
+
+struct ScheduledCommand {
+  int hour;
+  int minute;
+  char commandJson[200];  // Ensure this size is enough for your JSON commands
+};
+
+ScheduledCommand schedules[2];  // Buffer to hold up to 2 schedules
+int currentIndex = 0;
 
 // Function prototypes
 void startUdpServer();
@@ -60,10 +69,99 @@ void sendRawForVoice(int user_id, const char *button_id);
 String rawDataToString(uint16_t *rawData, uint16_t length);
 void setupAPAndConnectToWiFi();
 void handlePost();
+void checkScheduledCommands();
+void writeScheduleToEEPROM(int index, ScheduledCommand &schedule);
+void readScheduleFromEEPROM(int index, ScheduledCommand &schedule);
 
-// Function to setup the ESP32 as an access point and handle WiFi credentials
-void setupAPAndConnectToWiFi()
-{
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  setupAPAndConnectToWiFi();
+
+  Serial.println("");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+
+  UDP.begin(UDP_PORT);
+  Serial.print("Listening on UDP port: ");
+  Serial.println(UDP_PORT);
+
+#if DECODE_HASH
+  irrecv.setUnknownThreshold(kMinUnknownSize);
+#endif
+  irrecv.setTolerance(kTolerancePercentage);
+  irrecv.enableIRIn();
+  irsend.begin();
+
+  ac.next.model = 2;                              // Some A/Cs have different models. Try just the first.
+  ac.next.mode = stdAc::opmode_t::kCool;          // Run in cool mode initially.
+  ac.next.celsius = true;                         // Use Celsius for temp units. False = Fahrenheit
+  ac.next.degrees = 25;                           // 25 degrees.
+  ac.next.fanspeed = stdAc::fanspeed_t::kMedium;  // Start the fan at medium.
+  ac.next.swingv = stdAc::swingv_t::kOff;         // Don't swing the fan up or down.
+  ac.next.swingh = stdAc::swingh_t::kOff;         // Don't swing the fan left or right.
+  ac.next.light = false;                          // Turn off any LED/Lights/Display that we can.
+  ac.next.beep = false;                           // Turn off any beep from the A/C if we can.
+  ac.next.econo = false;                          // Turn off any economy modes if we can.
+  ac.next.filter = false;                         // Turn off any Ion/Mold/Health filters if we can.
+  ac.next.turbo = false;                          // Don't use any turbo/powerful/etc modes.
+  ac.next.quiet = false;                          // Don't use any quiet/silent/etc modes.
+  ac.next.sleep = -1;                             // Don't set any sleep time or modes.
+  ac.next.clean = false;                          // Turn off any Cleaning options if we can.
+  ac.next.clock = -1;                             // Don't set any current time if we can avoid it.
+
+  Serial.println("Try to turn on & off every supported A/C type ...");
+
+  Wire.begin(22, 23);  // SDA, SCL
+  if (!rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    while (1)
+      ;
+  }
+
+  if (rtc.lostPower()) {
+    Serial.println("RTC lost power, let's set the time!");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  }
+
+  EEPROM.begin(EEPROM_SIZE);
+  for (int i = 0; i < 2; i++) {
+    readScheduleFromEEPROM(i, schedules[i]);
+  }
+}
+
+void loop() {
+  for (int i = 0; i < 2; i++) {
+    readScheduleFromEEPROM(i, schedules[i]);
+  }
+  checkScheduledCommands();
+  int packetSize = UDP.parsePacket();
+  if (packetSize) {
+    Serial.print("Received packet! Size: ");
+    Serial.println(packetSize);
+
+    int len = UDP.read(packet, sizeof(packet) - 1);
+    packet[len] = '\0';
+    Serial.println(String(packet));
+    handleMessage(packet);
+  }
+
+  delay(1000);
+}
+
+void writeScheduleToEEPROM(int index, ScheduledCommand &schedule) {
+  int addr = index * sizeof(ScheduledCommand);
+  EEPROM.put(addr, schedule);
+  EEPROM.commit();
+  Serial.println("Write to EEPROM");
+}
+
+void readScheduleFromEEPROM(int index, ScheduledCommand &schedule) {
+  int addr = index * sizeof(ScheduledCommand);
+  EEPROM.get(addr, schedule);
+}
+
+void setupAPAndConnectToWiFi() {
   WiFi.softAP(ap_ssid, ap_password);
   IPAddress IP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
@@ -71,23 +169,18 @@ void setupAPAndConnectToWiFi()
   server.on("/post", HTTP_POST, handlePost);
   server.begin();
 
-  while (serverRunning)
-  {
+  while (serverRunning) {
     server.handleClient();
     delay(10);
   }
 }
 
-// Function to handle HTTP POST requests for WiFi credentials
-void handlePost()
-{
-  if (server.hasArg("plain"))
-  {
+void handlePost() {
+  if (server.hasArg("plain")) {
     String data = server.arg("plain");
     StaticJsonDocument<200> doc;
     DeserializationError error = deserializeJson(doc, data);
-    if (!error)
-    {
+    if (!error) {
       String wifiname = doc["wifiname"];
       String password = doc["password"];
       Serial.println("Wifiname: " + wifiname);
@@ -95,15 +188,13 @@ void handlePost()
 
       WiFi.begin(wifiname.c_str(), password.c_str());
       int attempts = 0;
-      while (WiFi.status() != WL_CONNECTED && attempts < 20)
-      {
+      while (WiFi.status() != WL_CONNECTED && attempts < 20) {
         delay(500);
         Serial.print(".");
         attempts++;
       }
 
-      if (WiFi.status() == WL_CONNECTED)
-      {
+      if (WiFi.status() == WL_CONNECTED) {
         Serial.println("Connected to WiFi!");
         Serial.print("IP address: ");
         Serial.println(WiFi.localIP());
@@ -117,101 +208,43 @@ void handlePost()
         server.stop();
         serverRunning = false;
         return;
-      }
-      else
-      {
+      } else {
         server.send(400, "application/json", "{\"status\":\"failure\",\"message\":\"Failed to connect to WiFi\"}");
       }
-    }
-    else
-    {
+    } else {
       server.send(400, "application/json", "{\"status\":\"failure\",\"message\":\"Invalid JSON Request\"}");
     }
-  }
-  else
-  {
+  } else {
     server.send(500, "application/json", "{\"status\":\"failure\",\"message\":\"No data received\"}");
   }
 }
 
-void setup()
-{
-  Serial.begin(115200);
-  delay(1000);
-  setupAPAndConnectToWiFi(); // Call the new function to setup AP and connect to WiFi
-
-  Serial.println("");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
-
-  UDP.begin(UDP_PORT);
-  Serial.print("Listening on UDP port: ");
-  Serial.println(UDP_PORT);
-
-#if DECODE_HASH
-  // Ignore messages with less than minimum on or off pulses.
-  irrecv.setUnknownThreshold(kMinUnknownSize);
-#endif                                       // DECODE_HASH
-  irrecv.setTolerance(kTolerancePercentage); // Override the default tolerance.
-  irrecv.enableIRIn();                       // Start the receiver
-  irsend.begin();
-
-  // Set up what we want to send.
-  // See state_t, opmode_t, fanspeed_t, swingv_t, & swingh_t in IRsend.h for
-  // all the various options.
-  // ac.next.protocol      // Set a protocol to use.
-  ac.next.model = 2;                             // Some A/Cs have different models. Try just the first.
-  ac.next.mode = stdAc::opmode_t::kCool;         // Run in cool mode initially.
-  ac.next.celsius = true;                        // Use Celsius for temp units. False = Fahrenheit
-  ac.next.degrees = 28;                          // 25 degrees.
-  ac.next.fanspeed = stdAc::fanspeed_t::kMedium; // Start the fan at medium.
-  ac.next.swingv = stdAc::swingv_t::kOff;        // Don't swing the fan up or down.
-  ac.next.swingh = stdAc::swingh_t::kOff;        // Don't swing the fan left or right.
-  ac.next.light = false;                         // Turn off any LED/Lights/Display that we can.
-  ac.next.beep = false;                          // Turn off any beep from the A/C if we can.
-  ac.next.econo = false;                         // Turn off any economy modes if we can.
-  ac.next.filter = false;                        // Turn off any Ion/Mold/Health filters if we can.
-  ac.next.turbo = false;                         // Don't use any turbo/powerful/etc modes.
-  ac.next.quiet = false;                         // Don't use any quiet/silent/etc modes.
-  ac.next.sleep = -1;                            // Don't set any sleep time or modes.
-  ac.next.clean = false;                         // Turn off any Cleaning options if we can.
-  ac.next.clock = -1;                            // Don't set any current time if we can avoid it.
-
-  Serial.println("Try to turn on & off every supported A/C type ...");
+void checkScheduledCommands() {
+  DateTime now = rtc.now();
+  for (int i = 0; i < 2; i++) {
+    if (schedules[i].hour == now.hour() && schedules[i].minute == now.minute()) {
+      handleMessage(schedules[i].commandJson);
+      Serial.println("Do Script");
+      // Clear the executed schedule
+      schedules[i].hour = -1;
+      schedules[i].minute = -1;
+      strcpy(schedules[i].commandJson, "");
+      writeScheduleToEEPROM(i, schedules[i]);
+    }
+  }
 }
 
-void loop()
-{
-  // If packet received...
-  int packetSize = UDP.parsePacket();
-  if (packetSize)
-  {
-    Serial.print("Received packet! Size: ");
-    Serial.println(packetSize);
-
-    int len = UDP.read(packet, sizeof(packet) - 1); // Leave space for null terminator
-    packet[len] = '\0';                             // Null-terminate the received data
-    Serial.println(String(packet));
-    handleMessage(packet);
-  };
-  delay(500);
-}
-
-void startUdpServer()
-{
+void startUdpServer() {
   UDP.stop();
   UDP.begin(UDP_PORT);
   Serial.print("Listening on UDP port: ");
   Serial.println(UDP_PORT);
 }
 
-void handleMessage(const char *message)
-{
-  // Parse the received JSON object
+void handleMessage(const char *message) {
   DynamicJsonDocument doc(1024);
   deserializeJson(doc, message);
 
-  // Access the command from the JSON object
   const char *command = doc["command"];
   const char *device_id = doc["device_id"];
   const char *button_id = doc["button_id"];
@@ -221,60 +254,70 @@ void handleMessage(const char *message)
   int hour = doc["hour"];
   int minute = doc["minute"];
 
-  if (strcmp(command, "ESP-ACK") == 0)
-  {
-    // Close old UDP socket server and begin new
+  if (hour != 0) {
+    // Remove hour and minute from the JSON document
+    doc.remove("hour");
+    doc.remove("minute");
+
+    // Serialize the updated JSON back to a string
+    char updatedMessage[1024];
+    serializeJson(doc, updatedMessage, sizeof(updatedMessage));
+
+    // Create a new ScheduledCommand with the updated JSON
+    ScheduledCommand newCommand = { hour, minute, "" };
+    strcpy(newCommand.commandJson, updatedMessage);
+    schedules[currentIndex] = newCommand;
+    writeScheduleToEEPROM(currentIndex, newCommand);
+
+    currentIndex = (currentIndex + 1) % 2;  // Circular buffer logic
+
+    Serial.println("Scheduled new command:");
+    Serial.println(updatedMessage);
+    UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+    UDP.print("DONE-SET-TIME");
+    UDP.endPacket();
+    return;
+  }
+
+  if (strcmp(command, "ESP-ACK") == 0) {
     UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
     UDP.print(WiFi.localIP());
     UDP.endPacket();
-  }
-  else if (strcmp(command, "CANCEL") == 0)
-  {
-    startUdpServer(); // Close old UDP socket server and begin new
-  }
-  else if (strcmp(command, "SEND") == 0)
-  {
-    while (true)
-    {
+  } else if (strcmp(command, "CANCEL") == 0) {
+    startUdpServer();
+  } else if (strcmp(command, "SEND") == 0) {
+    while (true) {
       int codeLen = UDP.read(packet, sizeof(packet) - 1);
-      if (codeLen > 0)
-      {
+      if (codeLen > 0) {
         packet[codeLen] = '\0';
         String hexCode = String(packet);
         Serial.print("Received hex code for ");
-        // Serial.print(remoteName);
         Serial.print(": ");
         Serial.println(hexCode);
 
-        if (hexCode == "CLOSE")
-        {
-          break; // Break while loop if "CLOSE" received
+        if (hexCode == "CLOSE") {
+          UDP.stop();
+          break;
         }
-        if (strcmp(packet, "ON-AC") == 0)
-        {
-          ac.next.power = true; // We want to turn on the A/C unit.
+        if (strcmp(packet, "ON-AC") == 0) {
+          ac.next.power = true;  // We want to turn on the A/C unit.
           Serial.println("Sending a message to turn ON the A/C unit.");
-          ac.sendAc(); // Have the IRac class create and send a message.
+          ac.sendAc();  // Have the IRac class create and send a message.
           delay(5000);
         }
-        if (hexCode == "OFF-AC")
-        {
-          ac.next.power = false; // We want to turn on the A/C unit.
+        if (hexCode == "OFF-AC") {
+          ac.next.power = false;  // We want to turn on the A/C unit.
           Serial.println("Sending a message to turn ON the A/C unit.");
-          ac.sendAc(); // Have the IRac class create and send a message.
+          ac.sendAc();  // Have the IRac class create and send a message.
           delay(5000);
         }
       }
     }
-  }
-  else if (strcmp(command, "RECEIVE") == 0)
-  {
+  } else if (strcmp(command, "RECEIVE") == 0) {
     String decodedProtocol = "";
-    while (decodedProtocol == "" || decodedProtocol == "UNKNOWN")
-    {
+    while (decodedProtocol == "" || decodedProtocol == "UNKNOWN") {
       decode_results results;
-      if (irrecv.decode(&results))
-      {
+      if (irrecv.decode(&results)) {
         decodedProtocol = typeToString(results.decode_type);
         Serial.print("Received IR signal, protocol: ");
         Serial.println(decodedProtocol);
@@ -286,16 +329,13 @@ void handleMessage(const char *message)
         UDP.endPacket();
         irrecv.resume();
 
-        if (ac.isProtocolSupported(results.decode_type))
-        {
+        if (ac.isProtocolSupported(results.decode_type)) {
           Serial.println("Protocol " + String(results.decode_type) + " / " + decodedProtocol + " is supported.");
-          ac.next.protocol = results.decode_type; // Change the protocol used.
+          ac.next.protocol = results.decode_type;  // Change the protocol used.
           // ac.next.degrees = 28;
           delay(100);
         };
-      }
-      else
-      {
+      } else {
         // No IR data received yet, wait and try again
         UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
         UDP.print("WAIT");
@@ -303,107 +343,76 @@ void handleMessage(const char *message)
         delay(100);
       };
     }
-  }
-  else if (strcmp(command, "ON-AC") == 0)
-  {
-    if (strcmp(mode, "1") == 0)
-    {
-      if (user_id)
-      { // Ensure both values are present
+  } else if (strcmp(command, "ON-AC") == 0) {
+    if (strcmp(mode, "1") == 0) {
+      if (user_id) {  // Ensure both values are present
         Serial.println("Received ONAC command.");
         Serial.print("User ID: ");
         Serial.println(user_id);
         sendRawForVoice(user_id, "power", ordinal);
-      }
-      else
-      {
+      } else {
         Serial.println("Error: Missing device_id or button_id in LEARN command.");
       }
-    }
-    else
-    {
-      // ac.next.protocol = decode_type_t::DAIKIN216;
+    } else {
+      //ac.next.protocol = decode_type_t::DAIKIN216;
       // ac.next.degrees = 28;
-      ac.next.power = true; // We want to turn on the A/C unit.
+      ac.next.power = true;  // We want to turn on the A/C unit.
       Serial.println("Sending a message to turn ON the A/C unit.");
-      ac.sendAc(); // Have the IRac class create and send a message.
+      ac.sendAc();  // Have the IRac class create and send a message.
     }
     // delay(5000);
-  }
-  else if (strcmp(command, "OFF-AC") == 0)
-  {
-    if (strcmp(mode, "1") == 0)
-    {
-      if (user_id)
-      { // Ensure both values are present
+  } else if (strcmp(command, "OFF-AC") == 0) {
+    if (strcmp(mode, "1") == 0) {
+      if (user_id) {  // Ensure both values are present
         Serial.println("Received OFFAC command.");
         Serial.print("User ID: ");
         Serial.println(user_id);
         sendRawForVoice(user_id, "power-off", ordinal);
-      }
-      else
-      {
+      } else {
         Serial.println("Error: Missing device_id or button_id in LEARN command.");
       }
-    }
-    else
-    {
-      // ac.next.protocol = decode_type_t::DAIKIN216;
+    } else {
+      //ac.next.protocol = decode_type_t::DAIKIN216;
       // ac.next.degrees = 28;
-      ac.next.power = false; // We want to turn on the A/C unit.
+      ac.next.power = false;  // We want to turn on the A/C unit.
       Serial.println("Sending a message to turn OFF the A/C unit.");
-      ac.sendAc(); // Have the IRac class create and send a message.
+      ac.sendAc();  // Have the IRac class create and send a message.
     }
     // delay(5000);
-  }
-  else if (strcmp(command, "LEARN") == 0)
-  {
-    if (device_id && button_id)
-    { // Ensure both values are present
+  } else if (strcmp(command, "LEARN") == 0) {
+    if (device_id && button_id) {  // Ensure both values are present
       Serial.println("Received LEARN command.");
       Serial.print("Device ID: ");
       Serial.println(device_id);
       Serial.print("Button ID: ");
       Serial.println(button_id);
       receiveRaw(device_id, button_id);
-    }
-    else
-    {
+    } else {
       Serial.println("Error: Missing device_id or button_id in LEARN command.");
     }
-  }
-  else if (strcmp(command, "SEND-LEARN") == 0)
-  {
-    if (device_id && button_id)
-    { // Ensure both values are present
+  } else if (strcmp(command, "SEND-LEARN") == 0) {
+    if (device_id && button_id) {  // Ensure both values are present
       Serial.println("Received LEARN command.");
       Serial.print("Device ID: ");
       Serial.println(device_id);
       Serial.print("Button ID: ");
       Serial.println(button_id);
       sendRaw(device_id, button_id);
-    }
-    else
-    {
+    } else {
       Serial.println("Error: Missing device_id or button_id in LEARN command.");
     }
-  }
-  else
-  {
+  } else {
     // Unknown message type, handle appropriately (if needed)
     // ...
   }
 }
 
 // Function to convert raw data to a string
-String rawDataToString(uint16_t *rawData, uint16_t length)
-{
+String rawDataToString(uint16_t *rawData, uint16_t length) {
   String str = "{";
-  for (uint16_t i = 0; i < length; i++)
-  {
+  for (uint16_t i = 0; i < length; i++) {
     str += String(rawData[i]);
-    if (i < length - 1)
-    {
+    if (i < length - 1) {
       str += ", ";
     }
   }
@@ -412,8 +421,7 @@ String rawDataToString(uint16_t *rawData, uint16_t length)
 }
 
 // Call API to save learn data to database
-bool callAPI(const char *buttonId, const char *deviceId, uint16_t *rawData, uint16_t length)
-{
+bool callAPI(const char *buttonId, const char *deviceId, uint16_t *rawData, uint16_t length) {
   // Convert raw data to JSON string
   String str = rawDataToString(rawData, length);
 
@@ -432,15 +440,12 @@ bool callAPI(const char *buttonId, const char *deviceId, uint16_t *rawData, uint
 
   int httpResponseCode = http.POST(payload);
 
-  if (httpResponseCode > 0)
-  {
+  if (httpResponseCode > 0) {
     String response = http.getString();
     Serial.println(httpResponseCode);
     Serial.println(response);
     return true;
-  }
-  else
-  {
+  } else {
     Serial.printf("Error sending POST: %d\n", httpResponseCode);
     return false;
   }
@@ -448,68 +453,53 @@ bool callAPI(const char *buttonId, const char *deviceId, uint16_t *rawData, uint
 }
 
 // receive raw data from IR receiver and send to API
-void receiveRaw(const char *device_id, const char *button_id)
-{
+void receiveRaw(const char *device_id, const char *button_id) {
   static int signalCounter = 0;
   decode_results results;
-  if (irrecv.decode(&results))
-  {
+  if (irrecv.decode(&results)) {
     signalCounter++;
     Serial.println();
-    if (signalCounter == 1)
-    {
+    if (signalCounter == 1) {
       // Convert raw data to JSON string
       uint16_t *rawData = resultToRawData(&results);
       const uint16_t length = getCorrectedRawLength(&results);
-      DynamicJsonDocument doc(1024); // Adjust capacity if needed
+      DynamicJsonDocument doc(1024);  // Adjust capacity if needed
       JsonArray rawDataArray = doc.createNestedArray("rawdata");
-      for (uint16_t i = 0; i < length; i++)
-      {
+      for (uint16_t i = 0; i < length; i++) {
         rawDataArray.add(rawData[i]);
       }
       String rawDataJson;
       serializeJson(doc, rawDataJson);
 
       Serial.printf("rawData[%d] = %s\n", (int)length, rawDataJson.c_str());
-      if (ac.isProtocolSupported(results.decode_type))
-      {
+      if (ac.isProtocolSupported(results.decode_type)) {
         UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
         UDP.print("PRO");
         UDP.endPacket();
         bool success = callAPI(button_id, device_id, rawData, length);
-        if (success)
-        {
+        if (success) {
           UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
           UDP.print("SUC-PRO");
           UDP.endPacket();
-        }
-        else
-        {
+        } else {
           UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
           UDP.print("NETWORK-ERR");
           UDP.endPacket();
         }
-      }
-      else if (length > 1000)
-      {
+      } else if (length > 1000) {
         UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
         UDP.print("LEARN-FAIL");
         UDP.endPacket();
-      }
-      else
-      {
+      } else {
         UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
         UDP.print("SUC-NOPRO");
         UDP.endPacket();
         bool success = callAPI(button_id, device_id, rawData, length);
-        if (success)
-        {
+        if (success) {
           UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
           UDP.print("SUC-NOPRO");
           UDP.endPacket();
-        }
-        else
-        {
+        } else {
           UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
           UDP.print("NETWORK-ERR");
           UDP.endPacket();
@@ -527,38 +517,32 @@ void receiveRaw(const char *device_id, const char *button_id)
 }
 
 // control device by learned data
-void sendRaw(const char *device_id, const char *button_id)
-{
+void sendRaw(const char *device_id, const char *button_id) {
   int length;
   uint16_t *rawData;
   Serial.println("Start Fetch");
   bool success = getSignalData(apiBaseURL, String(device_id), String(button_id), length, rawData);
 
-  if (success)
-  {
+  if (success) {
     UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
     UDP.print("SUC-SEND");
     UDP.endPacket();
     Serial.println("Raw from TestReceiveRaw");
     irsend.sendRaw(rawData, length, 38);
     Serial.println("Sent");
-  }
-  else
-  {
+  } else {
     UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
     UDP.print("NETWORK-ERR");
     UDP.endPacket();
   }
-  delete[] rawData; // Free memory after sending
+  delete[] rawData;  // Free memory after sending
 }
 
 // Function to convert string to raw data
-uint16_t *stringToRawData(String str, int length)
-{
+uint16_t *stringToRawData(String str, int length) {
   uint16_t *rawData = new uint16_t[length];
   char *token = strtok((char *)str.c_str(), ", ");
-  for (int i = 0; token != NULL && i < length; i++)
-  {
+  for (int i = 0; token != NULL && i < length; i++) {
     rawData[i] = (uint16_t)atoi(token);
     token = strtok(NULL, ", ");
   }
@@ -566,22 +550,19 @@ uint16_t *stringToRawData(String str, int length)
 }
 
 // Call API to get learned data from database
-bool getSignalData(const String &baseURL, const String &device_id, const String &button_id, int &length, uint16_t *&rawData)
-{
-  if ((WiFi.status() == WL_CONNECTED))
-  { // Check the current connection status
+bool getSignalData(const String &baseURL, const String &device_id, const String &button_id, int &length, uint16_t *&rawData) {
+  if ((WiFi.status() == WL_CONNECTED)) {  // Check the current connection status
     HTTPClient http;
 
     String url = baseURL + "/api/signal/learns/getbyid?device_id=" + device_id + "&button_id=" + button_id;
-    http.begin(url.c_str()); // Specify the URL
+    http.begin(url.c_str());  // Specify the URL
     int httpCode = http.GET();
 
     // Print the HTTP status code
     Serial.print("HTTP response status code: ");
     Serial.println(httpCode);
 
-    if (httpCode > 0)
-    { // Check for the returning code
+    if (httpCode > 0) {  // Check for the returning code
       String payload = http.getString();
       Serial.println(payload);
 
@@ -592,8 +573,7 @@ bool getSignalData(const String &baseURL, const String &device_id, const String 
       DeserializationError error = deserializeJson(doc, payload);
 
       // Test if parsing succeeds.
-      if (error)
-      {
+      if (error) {
         Serial.print("deserializeJson() failed: ");
         Serial.println(error.c_str());
         return false;
@@ -604,66 +584,57 @@ bool getSignalData(const String &baseURL, const String &device_id, const String 
       String rawDataString = doc["signal"]["rawdata"];
 
       // Remove the curly braces from the rawDataString
-      rawDataString.remove(0, 1);                       // remove the first character
-      rawDataString.remove(rawDataString.length() - 1); // remove the last character
+      rawDataString.remove(0, 1);                        // remove the first character
+      rawDataString.remove(rawDataString.length() - 1);  // remove the last character
 
       // Convert the rawDataString to an array of uint16_t
       rawData = stringToRawData(rawDataString, length);
       return true;
-    }
-    else
-    {
+    } else {
       Serial.println("Error on HTTP request");
       return false;
     }
 
-    http.end(); // Free the resources
+    http.end();  // Free the resources
   }
 }
 
 // Control device by learned data (voice mode)
-void sendRawForVoice(int user_id, const char *button_id, int ordinal)
-{
+void sendRawForVoice(int user_id, const char *button_id, int ordinal) {
   int length;
   uint16_t *rawData;
   Serial.println("Start Fetch");
   bool success = getSignalDataForVoice(apiBaseURL, user_id, String(button_id), length, rawData, ordinal);
 
-  if (success)
-  {
+  if (success) {
     UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
     UDP.print("SUC-SEND");
     UDP.endPacket();
     Serial.println("Raw from TestReceiveRaw");
     irsend.sendRaw(rawData, length, 38);
     Serial.println("Sent");
-  }
-  else
-  {
+  } else {
     UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
     UDP.print("NETWORK-ERR");
     UDP.endPacket();
   }
-  delete[] rawData; // Free memory after sending
+  delete[] rawData;  // Free memory after sending
 }
 
 // Call API to get learned data from database (voice mode)
-bool getSignalDataForVoice(const String &baseURL, int user_id, const String &button_id, int &length, uint16_t *&rawData, int ordinal)
-{
-  if ((WiFi.status() == WL_CONNECTED))
-  { // Check the current connection status
+bool getSignalDataForVoice(const String &baseURL, int user_id, const String &button_id, int &length, uint16_t *&rawData, int ordinal) {
+  if ((WiFi.status() == WL_CONNECTED)) {  // Check the current connection status
     HTTPClient http;
 
     String url = baseURL + "/api/signal/learns/voice/getbyuserid?user_id=" + user_id + "&type_id=" + 3 + "&button_id=" + button_id + "&ordinal=" + ordinal;
-    http.begin(url.c_str()); // Specify the URL
+    http.begin(url.c_str());  // Specify the URL
     int httpCode = http.GET();
 
     // Print the HTTP status code
     Serial.print("HTTP response status code: ");
     Serial.println(httpCode);
 
-    if (httpCode > 0)
-    { // Check for the returning code
+    if (httpCode > 0) {  // Check for the returning code
       String payload = http.getString();
       Serial.println(payload);
 
@@ -674,8 +645,7 @@ bool getSignalDataForVoice(const String &baseURL, int user_id, const String &but
       DeserializationError error = deserializeJson(doc, payload);
 
       // Test if parsing succeeds.
-      if (error)
-      {
+      if (error) {
         Serial.print("deserializeJson() failed: ");
         Serial.println(error.c_str());
         return false;
@@ -686,19 +656,17 @@ bool getSignalDataForVoice(const String &baseURL, int user_id, const String &but
       String rawDataString = doc["signal"]["rawdata"];
 
       // Remove the curly braces from the rawDataString
-      rawDataString.remove(0, 1);                       // remove the first character
-      rawDataString.remove(rawDataString.length() - 1); // remove the last character
+      rawDataString.remove(0, 1);                        // remove the first character
+      rawDataString.remove(rawDataString.length() - 1);  // remove the last character
 
       // Convert the rawDataString to an array of uint16_t
       rawData = stringToRawData(rawDataString, length);
       return true;
-    }
-    else
-    {
+    } else {
       Serial.println("Error on HTTP request");
       return false;
     }
 
-    http.end(); // Free the resources
+    http.end();  // Free the resources
   }
 }
