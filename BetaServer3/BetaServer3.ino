@@ -34,11 +34,11 @@ const uint8_t kTolerancePercentage = kTolerance;
 
 WiFiUDP UDP;
 IRrecv irrecv(15, kCaptureBufferSize, kTimeout, true);
-IRac ac(2);
+IRac ac(4);
 IRsend irsend(4);
 
 char packet[255];
-const char *apiBaseURL = "http://192.168.1.39:3001";
+const char *apiBaseURL = "http://192.168.1.11:3001";
 
 const char *ap_ssid = "ESP32_AP";
 const char *ap_password = "12345678";
@@ -93,10 +93,10 @@ void setup() {
   irrecv.enableIRIn();
   irsend.begin();
 
-  ac.next.model = 2;                              // Some A/Cs have different models. Try just the first.
+  ac.next.model = 1;                              // Some A/Cs have different models. Try just the first.
   ac.next.mode = stdAc::opmode_t::kCool;          // Run in cool mode initially.
   ac.next.celsius = true;                         // Use Celsius for temp units. False = Fahrenheit
-  ac.next.degrees = 25;                           // 25 degrees.
+  ac.next.degrees = 27;                           // 25 degrees.
   ac.next.fanspeed = stdAc::fanspeed_t::kMedium;  // Start the fan at medium.
   ac.next.swingv = stdAc::swingv_t::kOff;         // Don't swing the fan up or down.
   ac.next.swingh = stdAc::swingh_t::kOff;         // Don't swing the fan left or right.
@@ -125,14 +125,16 @@ void setup() {
   }
 
   EEPROM.begin(EEPROM_SIZE);
-  for (int i = 0; i < 2; i++) {
-    readScheduleFromEEPROM(i, schedules[i]);
-  }
 }
 
 void loop() {
   for (int i = 0; i < 2; i++) {
     readScheduleFromEEPROM(i, schedules[i]);
+  }
+  //beta way. i need to buy a new battery for clock
+  if (rtc.lostPower()) {
+    //test
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   }
   checkScheduledCommands();
   int packetSize = UDP.parsePacket();
@@ -159,6 +161,26 @@ void writeScheduleToEEPROM(int index, ScheduledCommand &schedule) {
 void readScheduleFromEEPROM(int index, ScheduledCommand &schedule) {
   int addr = index * sizeof(ScheduledCommand);
   EEPROM.get(addr, schedule);
+}
+
+void checkScheduledCommands() {
+  DateTime now = rtc.now();
+  Serial.print("Current time: ");
+  Serial.print(now.hour());
+  Serial.print(":");
+  Serial.println(now.minute());
+
+  for (int i = 0; i < 2; i++) {
+    if (schedules[i].hour == now.hour() && schedules[i].minute == now.minute()) {
+      handleMessage(schedules[i].commandJson);
+      Serial.println("Do Script");
+      // Clear the executed schedule
+      schedules[i].hour = -1;
+      schedules[i].minute = -1;
+      strcpy(schedules[i].commandJson, "");
+      writeScheduleToEEPROM(i, schedules[i]);
+    }
+  }
 }
 
 void setupAPAndConnectToWiFi() {
@@ -216,21 +238,6 @@ void handlePost() {
     }
   } else {
     server.send(500, "application/json", "{\"status\":\"failure\",\"message\":\"No data received\"}");
-  }
-}
-
-void checkScheduledCommands() {
-  DateTime now = rtc.now();
-  for (int i = 0; i < 2; i++) {
-    if (schedules[i].hour == now.hour() && schedules[i].minute == now.minute()) {
-      handleMessage(schedules[i].commandJson);
-      Serial.println("Do Script");
-      // Clear the executed schedule
-      schedules[i].hour = -1;
-      schedules[i].minute = -1;
-      strcpy(schedules[i].commandJson, "");
-      writeScheduleToEEPROM(i, schedules[i]);
-    }
   }
 }
 
