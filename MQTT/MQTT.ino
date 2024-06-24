@@ -2,13 +2,13 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 
-const char* ssid = "VNPT-NGOCANH";     // Wifi connect
-const char* password = "tueminhvolg";  // Password
+const char* ssid = "";     // Wifi connect
+const char* password = "";  // Password
 
 const char* mqtt_server = "broker.emqx.io";
 const int mqtt_port = 1883;                     // Change to 1883 for non-secure connection
-const char* mqtt_username = "haitacdc00";       // User
-const char* mqtt_password = "SiucapvipprO#10";  // Password
+const char* mqtt_username = "";       // User
+const char* mqtt_password = "";  // Password
 
 WiFiClient espClient;
 PubSubClient client(espClient);
