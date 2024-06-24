@@ -1,3 +1,4 @@
+#include <ArduinoJson.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <IRremoteESP8266.h>
@@ -6,11 +7,11 @@
 #include <IRsend.h>
 #include <IRutils.h>
 #include <HTTPClient.h>
-#include <ArduinoJson.h>
 #include <WebServer.h>
 #include <RTClib.h>
 #include <EEPROM.h>
 #include <Wire.h>
+#include <PubSubClient.h>
 
 #define UDP_PORT 12345
 #define SOCK_PORT 124
@@ -56,6 +57,22 @@ struct ScheduledCommand {
 ScheduledCommand schedules[2];  // Buffer to hold up to 2 schedules
 int currentIndex = 0;
 
+// MQTT Constants
+const char *mqtt_server = "broker.emqx.io";
+const int mqtt_port = 1883;
+const char *mqtt_username = "haitacdc00";
+const char *mqtt_password = "SiucapvipprO#10";
+
+// Button Pin Definitions
+const int button1Pin = 18;  // Adjust these pins to match your actual wiring
+const int button2Pin = 19;
+
+// Communication Mode
+int connectionMode = 1;
+
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);  // Create MQTT client
+
 // Function prototypes
 void startUdpServer();
 void handleMessage(const char *message);
@@ -72,6 +89,9 @@ void handlePost();
 void checkScheduledCommands();
 void writeScheduleToEEPROM(int index, ScheduledCommand &schedule);
 void readScheduleFromEEPROM(int index, ScheduledCommand &schedule);
+void publishMessage(const char *topic, String payload, boolean retained);
+void reconnectMQTT();
+void mqttCallback(char *topic, byte *payload, unsigned int length);
 
 void setup() {
   Serial.begin(115200);
@@ -112,6 +132,12 @@ void setup() {
 
   Serial.println("Try to turn on & off every supported A/C type ...");
 
+  pinMode(button1Pin, INPUT_PULLUP);
+  pinMode(button2Pin, INPUT_PULLUP);
+
+  mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setCallback(mqttCallback);
+
   Wire.begin(22, 23);  // SDA, SCL
   if (!rtc.begin()) {
     Serial.println("Couldn't find RTC");
@@ -128,27 +154,102 @@ void setup() {
 }
 
 void loop() {
+  // Button Handling
+  int button1State = digitalRead(button1Pin);
+  int button2State = digitalRead(button2Pin);
   for (int i = 0; i < 2; i++) {
     readScheduleFromEEPROM(i, schedules[i]);
   }
   //beta way. i need to buy a new battery for clock
-  if (rtc.lostPower()) {
-    //test
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  }
+  // if (rtc.lostPower()) {
+  //   //test
+  //   rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+  // }
   checkScheduledCommands();
-  int packetSize = UDP.parsePacket();
-  if (packetSize) {
-    Serial.print("Received packet! Size: ");
-    Serial.println(packetSize);
+  if (button1State == LOW) {
+    connectionMode = 1;  // Switch to UDP mode
+    mqttClient.disconnect();
+    startUdpServer();
+    Serial.println("UDP mode");
+  } else if (button2State == LOW) {
+    connectionMode = 2;  // Switch to MQTT mode
+    UDP.stop();
+    Serial.println("MQTT mode");
+  }
 
-    int len = UDP.read(packet, sizeof(packet) - 1);
-    packet[len] = '\0';
-    Serial.println(String(packet));
-    handleMessage(packet);
+  if (connectionMode == 2) {
+    if (!mqttClient.connected()) {
+      reconnectMQTT();
+    }
+    mqttClient.loop();
+  } else {
+    int packetSize = UDP.parsePacket();
+    if (packetSize) {
+      Serial.print("Received packet! Size: ");
+      Serial.println(packetSize);
+
+      int len = UDP.read(packet, sizeof(packet) - 1);
+      packet[len] = '\0';
+      Serial.println(String(packet));
+      handleMessage(packet);
+    }
   }
 
   delay(1000);
+}
+
+// MQTT Reconnect
+void reconnectMQTT() {
+  while (!mqttClient.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (mqttClient.connect("ESP32-01", mqtt_username, mqtt_password)) {
+      Serial.println("Connected");
+      mqttClient.subscribe("esp32/connect");  // Topic to listen for commands
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
+// MQTT Callback
+void mqttCallback(char *topic, byte *payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  Serial.write(payload, length);
+  Serial.println();
+
+  DynamicJsonDocument doc(1024);  // Adjust size if needed
+  DeserializationError error = deserializeJson(doc, payload, length);
+
+  if (error) {
+    Serial.print(F("deserializeJson() failed: "));
+    Serial.println(error.c_str());
+    return;
+  }
+
+  // Check for client_id and command fields
+  if (!doc["client_id"] || !doc["command"] || strcmp(doc["client_id"], "ESP32-01") == 0) {
+    Serial.println("Missing field or wrong reveiced");
+    return;
+  }
+
+  const char *command = doc["command"];
+  if (command) {
+    Serial.print("Command received: ");
+    Serial.println(command);
+
+    // Acknowledge command receipt
+    publishMessage("esp32/connect", "{\"client_id\":\"ESP32-01\",\"message\":\"RECEIVE\"}", true);
+  }
+}
+
+void publishMessage(const char *topic, String payload, boolean retained) {
+  if (mqttClient.publish(topic, payload.c_str(), retained))
+    Serial.println("Message published [" + String(topic) + "]: " + payload);
 }
 
 void writeScheduleToEEPROM(int index, ScheduledCommand &schedule) {
