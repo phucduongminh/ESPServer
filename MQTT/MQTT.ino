@@ -1,23 +1,17 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <WiFiClientSecure.h>
 
-//----Thay đổi thành thông tin của bạn---------------
-const char* ssid = "";      //Wifi connect
-const char* password = "";  //Password
+const char* ssid = "VNPT-NGOCANH";     // Wifi connect
+const char* password = "tueminhvolg";  // Password
 
-const char* mqtt_server = "";
-const int mqtt_port = 8883;
-const char* mqtt_username = "";     //User
-const char* mqtt_password = "";  //Password
-//--------------------------------------------------
-WiFiClientSecure espClient;
+const char* mqtt_server = "broker.emqx.io";
+const int mqtt_port = 1883;                     // Change to 1883 for non-secure connection
+const char* mqtt_username = "haitacdc00";       // User
+const char* mqtt_password = "SiucapvipprO#10";  // Password
+
+WiFiClient espClient;
 PubSubClient client(espClient);
-
-unsigned long lastMsg = 0;
-#define MSG_BUFFER_SIZE (50)
-char msg[MSG_BUFFER_SIZE];
 
 void setup_wifi() {
   delay(10);
@@ -29,21 +23,19 @@ void setup_wifi() {
     delay(500);
     Serial.print(".");
   }
-  randomSeed(micros());
   Serial.println("");
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
 }
-//------------Connect to MQTT Broker-----------------------------
+
 void reconnect() {
   while (!client.connected()) {
     Serial.print("Attempting MQTT connection...");
-    String clientID = "ESPClient-";
-    clientID += String(random(0xffff), HEX);
+    String clientID = "ESP32-01";
     if (client.connect(clientID.c_str(), mqtt_username, mqtt_password)) {
       Serial.println("connected");
-      client.subscribe("esp32/client"); //subscribe(topic)
+      client.subscribe("esp32/connect");  // subscribe to the topic
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -52,25 +44,47 @@ void reconnect() {
     }
   }
 }
-//-----Call back Method for Receiving MQTT massage---------
+
 void callback(char* topic, byte* payload, unsigned int length) {
-  String incommingMessage = "";
-  for (int i = 0; i < length; i++) incommingMessage += (char)payload[i];
-  Serial.println("Massage arived [" + String(topic) + "]" + incommingMessage);
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  Serial.write(payload, length);
+  Serial.println();
+
+  DynamicJsonDocument doc(1024);  // Adjust size if needed
+  DeserializationError error = deserializeJson(doc, payload, length);
+
+  if (error) {
+    Serial.print(F("deserializeJson() failed: "));
+    Serial.println(error.c_str());
+    return;
+  }
+
+  // Check for client_id and command fields
+  if (!doc["client_id"] || !doc["command"] || strcmp(doc["client_id"], "ESP32-01") == 0) {
+    Serial.println("Missing field or wrong reveiced");
+    return;
+  }
+
+  const char* command = doc["command"];
+  if (command) {
+    Serial.print("Command received: ");
+    Serial.println(command);
+
+    // Acknowledge command receipt
+    publishMessage("esp32/connect", "{\"client_id\":\"ESP32-01\",\"message\":\"RECEIVE\"}", true);
+  }
 }
-//-----Method for Publishing MQTT Messages---------
+
 void publishMessage(const char* topic, String payload, boolean retained) {
-  if (client.publish(topic, payload.c_str(), true))
+  if (client.publish(topic, payload.c_str(), retained))
     Serial.println("Message published [" + String(topic) + "]: " + payload);
 }
 
-
 void setup() {
-  Serial.begin(9600);
-  while (!Serial) delay(1);
-
+  Serial.begin(115200);
   setup_wifi();
-  espClient.setInsecure();
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
 }
@@ -80,12 +94,4 @@ void loop() {
     reconnect();
   }
   client.loop();
-  DynamicJsonDocument doc(1024);
-  doc["Number1"] = 200;
-  doc["Number2"] = 30;
-  char mqtt_message[128];
-  serializeJson(doc, mqtt_message);
-  //topic, message
-  publishMessage("esp32/test", mqtt_message, true);
-  delay(6000);
 }
