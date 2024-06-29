@@ -35,11 +35,11 @@ const uint8_t kTolerancePercentage = kTolerance;
 
 WiFiUDP UDP;
 IRrecv irrecv(15, kCaptureBufferSize, kTimeout, true);
-IRac ac(4);
+IRac ac(2);
 IRsend irsend(4);
 
 char packet[255];
-const char *apiBaseURL = "http://192.168.1.11:3001";
+const char *apiBaseURL = "http://192.168.1.39:3001";
 
 const char *ap_ssid = "ESP32_AP";
 const char *ap_password = "12345678";
@@ -266,10 +266,10 @@ void readScheduleFromEEPROM(int index, ScheduledCommand &schedule) {
 
 void checkScheduledCommands() {
   DateTime now = rtc.now();
-  Serial.print("Current time: ");
-  Serial.print(now.hour());
-  Serial.print(":");
-  Serial.println(now.minute());
+  // Serial.print("Current time: ");
+  // Serial.print(now.hour());
+  // Serial.print(":");
+  // Serial.println(now.minute());
 
   for (int i = 0; i < 2; i++) {
     if (schedules[i].hour == now.hour() && schedules[i].minute == now.minute()) {
