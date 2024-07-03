@@ -34,9 +34,9 @@ const uint16_t kCaptureBufferSize = 1024;
 const uint8_t kTolerancePercentage = kTolerance;
 
 WiFiUDP UDP;
-IRrecv irrecv(15, kCaptureBufferSize, kTimeout, true);
-IRac ac(2);
-IRsend irsend(4);
+IRrecv irrecv(34, kCaptureBufferSize, kTimeout, true);
+IRac ac(23);
+IRsend irsend(19);
 
 char packet[255];
 const char *apiBaseURL = "http://192.168.1.39:3001";
@@ -65,7 +65,7 @@ const char *mqtt_password = "SiucapvipprO#10";
 
 // Button Pin Definitions
 const int button1Pin = 18;  // Adjust these pins to match your actual wiring
-const int button2Pin = 19;
+const int button2Pin = 5;
 
 // Communication Mode
 int connectionMode = 1;
@@ -138,7 +138,7 @@ void setup() {
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setCallback(mqttCallback);
 
-  Wire.begin(22, 23);  // SDA, SCL
+  Wire.begin(21, 22);  // SDA, SCL
   if (!rtc.begin()) {
     Serial.println("Couldn't find RTC");
     while (1)
@@ -266,10 +266,10 @@ void readScheduleFromEEPROM(int index, ScheduledCommand &schedule) {
 
 void checkScheduledCommands() {
   DateTime now = rtc.now();
-  // Serial.print("Current time: ");
-  // Serial.print(now.hour());
-  // Serial.print(":");
-  // Serial.println(now.minute());
+  Serial.print("Current time: ");
+  Serial.print(now.hour());
+  Serial.print(":");
+  Serial.println(now.minute());
 
   for (int i = 0; i < 2; i++) {
     if (schedules[i].hour == now.hour() && schedules[i].minute == now.minute()) {
