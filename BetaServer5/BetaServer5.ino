@@ -243,7 +243,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     Serial.println(command);
 
     // Acknowledge command receipt
-    publishMessage("esp32/connect", "{\"client_id\":\"ESP32-01\",\"message\":\"RECEIVE\"}", true);
+    publishMessage("esp32/acks", "{\"client_id\":\"ESP32-01\",\"message\":\"RECEIVE\"}", true);
   }
 }
 
