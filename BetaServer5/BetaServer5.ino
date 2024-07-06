@@ -266,10 +266,10 @@ void readScheduleFromEEPROM(int index, ScheduledCommand &schedule) {
 
 void checkScheduledCommands() {
   DateTime now = rtc.now();
-  Serial.print("Current time: ");
-  Serial.print(now.hour());
-  Serial.print(":");
-  Serial.println(now.minute());
+  // Serial.print("Current time: ");
+  // Serial.print(now.hour());
+  // Serial.print(":");
+  // Serial.println(now.minute());
 
   for (int i = 0; i < 2; i++) {
     if (schedules[i].hour == now.hour() && schedules[i].minute == now.minute()) {
@@ -423,6 +423,7 @@ void handleMessage(const char *message) {
     }
   } else if (strcmp(command, "RECEIVE") == 0) {
     String decodedProtocol = "";
+    int unknownCount = 0;
     while (decodedProtocol == "" || decodedProtocol == "UNKNOWN") {
       decode_results results;
       if (irrecv.decode(&results)) {
@@ -441,14 +442,25 @@ void handleMessage(const char *message) {
           Serial.println("Protocol " + String(results.decode_type) + " / " + decodedProtocol + " is supported.");
           ac.next.protocol = results.decode_type;  // Change the protocol used.
           // ac.next.degrees = 28;
-          delay(100);
-        };
+          //delay(100);
+          unknownCount = 0;
+          break;
+        } else {
+          unknownCount++;  // Increment counter if protocol is "UNKNOWN"
+          if (unknownCount >= 2) {
+            // Send "UNSUPPORTED" after two consecutive "UNKNOWN" protocols
+            UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+            UDP.print("UNSUPPORTED");
+            UDP.endPacket();
+            break;  // Exit the loop
+          }
+        }
       } else {
         // No IR data received yet, wait and try again
         UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
         UDP.print("WAIT");
         UDP.endPacket();
-        delay(100);
+        delay(1000);
       };
     }
   } else if (strcmp(command, "ON-AC") == 0) {
