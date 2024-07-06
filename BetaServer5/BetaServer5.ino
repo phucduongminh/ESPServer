@@ -204,7 +204,7 @@ void reconnectMQTT() {
     Serial.print("Attempting MQTT connection...");
     if (mqttClient.connect("ESP32-01", mqtt_username, mqtt_password)) {
       Serial.println("Connected");
-      mqttClient.subscribe("esp32/connect");  // Topic to listen for commands
+      mqttClient.subscribe("esp32/request");  // Topic to listen for commands
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());
@@ -214,13 +214,21 @@ void reconnectMQTT() {
   }
 }
 
-// MQTT Callback
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
   Serial.write(payload, length);
   Serial.println();
+
+  // 1. Create a Temporary Buffer
+  char messageBuffer[length + 1];  // +1 for null terminator
+
+  // 2. Copy Payload to the Buffer
+  memcpy(messageBuffer, payload, length);
+
+  // 3. Add Null Terminator
+  messageBuffer[length] = '\0';
 
   DynamicJsonDocument doc(1024);  // Adjust size if needed
   DeserializationError error = deserializeJson(doc, payload, length);
@@ -243,7 +251,9 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     Serial.println(command);
 
     // Acknowledge command receipt
-    publishMessage("esp32/acks", "{\"client_id\":\"ESP32-01\",\"message\":\"RECEIVE\"}", true);
+    publishMessage("esp32/response", "{\"client_id\":\"ESP32-01\",\"message\":\"RECEIVE\"}", false);
+    // 4. Pass the Buffer to handleMessage
+    handleMessage(messageBuffer);
   }
 }
 
