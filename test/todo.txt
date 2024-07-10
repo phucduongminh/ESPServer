@@ -1,1 +1,27 @@
-Chua fix truong hop receive nhung unknown dan den lap vo han
+Chua fix truong hop receive nhung unknown dan den lap vo han // Maybe fixed
+Fix loi nhan nut o man hinh Home // Maybe fixed
+Voice chua handle loi // Maybe fixed
+ON OFF AC Mode 0 (esp chua response da chuyen state on off roi) //Maybe fixed
+
+Hoan thien ket noi MQTT
+- Sua publish, subcribe // Maybe done
+- Sua Message nhan // Maybe done
+- Fix man hinh //70%
+- Ghep voi man hinh remote //can test
+
+Sua luong doc lenh
+- Them API luu Protocol //done
+- Sua call Api luu Protocol neu doc duoc Protocol //can test
+
+Sua support Brand //
+- Tao bang moi
+- Tao API moi (fake ok)
+
+Script con han che 
+- chua fix thoi gian bi cham // tam chap nhan
+- Them protocol vao dieu khien mode 0
+
+Check connect truoc khi navigate den man hinh remote
+
+Test va Fix nhung loi khac
+
