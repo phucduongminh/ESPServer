@@ -5,7 +5,7 @@ RTC_DS3231 rtc;
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin(22, 23); // SDA, SCL
+  Wire.begin(21, 22); // SDA, SCL
 
   if (!rtc.begin()) {
     Serial.println("Couldn't find RTC");
