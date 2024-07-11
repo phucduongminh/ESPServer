@@ -97,6 +97,14 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   setupAPAndConnectToWiFi();
+  // WiFi.begin("VNPT-NGOCANH", "tueminhvolg");
+  // int attempts = 0;
+  // while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+  //   delay(500);
+  //   Serial.print(".");
+  //   attempts++;
+  // }
+  // Serial.println();
 
   Serial.println("");
   Serial.print("IP: ");
@@ -116,7 +124,7 @@ void setup() {
   ac.next.model = 1;                              // Some A/Cs have different models. Try just the first.
   ac.next.mode = stdAc::opmode_t::kCool;          // Run in cool mode initially.
   ac.next.celsius = true;                         // Use Celsius for temp units. False = Fahrenheit
-  ac.next.degrees = 27;                           // 25 degrees.
+  //ac.next.degrees = 27;                           // 25 degrees.
   ac.next.fanspeed = stdAc::fanspeed_t::kMedium;  // Start the fan at medium.
   ac.next.swingv = stdAc::swingv_t::kOff;         // Don't swing the fan up or down.
   ac.next.swingh = stdAc::swingh_t::kOff;         // Don't swing the fan left or right.
@@ -259,7 +267,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
 
 void publishMessage(const char *topic, String payload, boolean retained) {
   if (mqttClient.publish(topic, payload.c_str(), retained))
-    Serial.println("Message published [" + String(topic) + "]: " + payload);
+    Serial.println("Message Responsed!");
 }
 
 void writeScheduleToEEPROM(int index, ScheduledCommand &schedule) {
@@ -276,13 +284,15 @@ void readScheduleFromEEPROM(int index, ScheduledCommand &schedule) {
 
 void checkScheduledCommands() {
   DateTime now = rtc.now();
-  Serial.print("Current time: ");
-  Serial.print(now.hour());
-  Serial.print(":");
-  Serial.println(now.minute());
+  // Serial.print("Current time: ");
+  // Serial.print(now.hour());
+  // Serial.print(":");
+  // Serial.println(now.minute());
 
   for (int i = 0; i < 2; i++) {
     if (schedules[i].hour == now.hour() && schedules[i].minute == now.minute()) {
+      Serial.print("JSON Length: ");
+      Serial.println(strlen(schedules[i].commandJson));
       handleMessage(schedules[i].commandJson);
       Serial.println("Do Script");
       // Clear the executed schedule
@@ -370,14 +380,26 @@ void handleMessage(const char *message) {
   int user_id = doc["user_id"];
   int ordinal = doc["ordinal"];
   const char *mode = doc["mode"];
-  int hour = doc["hour"];
-  int minute = doc["minute"];
-  const char *Protocol = doc["Protocol"];
+  if (doc["Protocol"]){
+    const char *Protocol = doc["Protocol"];
+    ac.next.protocol = stringToType(Protocol);
+  }
+  int degree;
+  if (doc["degree"]) {
+    degree = doc["degree"];
+  }
 
-  if (hour != 0) {
+  if (doc["hour"]) {
     // Remove hour and minute from the JSON document
+    int hour = doc["hour"];
+    int minute;
     doc.remove("hour");
-    doc.remove("minute");
+    if (doc["minute"]) {
+      minute = doc["minute"];
+      doc.remove("minute");
+    } else {
+      minute = 0;
+    }
 
     // Serialize the updated JSON back to a string
     char updatedMessage[1024];
@@ -410,32 +432,6 @@ void handleMessage(const char *message) {
     UDP.endPacket();
   } else if (strcmp(command, "CANCEL") == 0) {
     startUdpServer();
-  } else if (strcmp(command, "SEND") == 0) {
-    while (true) {
-      int codeLen = UDP.read(packet, sizeof(packet) - 1);
-      if (codeLen > 0) {
-        packet[codeLen] = '\0';
-        String hexCode = String(packet);
-        Serial.print("Received hex code for ");
-        Serial.print(": ");
-        Serial.println(hexCode);
-
-        if (hexCode == "CLOSE") {
-          UDP.stop();
-          break;
-        }
-        if (strcmp(packet, "ON-AC") == 0) {
-          ac.next.power = true;  // We want to turn on the A/C unit.
-          Serial.println("Sending a message to turn ON the A/C unit.");
-          ac.sendAc();  // Have the IRac class create and send a message.
-        }
-        if (hexCode == "OFF-AC") {
-          ac.next.power = false;  // We want to turn on the A/C unit.
-          Serial.println("Sending a message to turn ON the A/C unit.");
-          ac.sendAc();  // Have the IRac class create and send a message.
-        }
-      }
-    }
   } else if (strcmp(command, "RECEIVE") == 0) {
     irrecv.enableIRIn();
     delay(500);
@@ -510,6 +506,7 @@ void handleMessage(const char *message) {
       } else {
         publishMessage("esp32/response", "{\"client_id\":\"ESP32-01\",\"message\":\"RECEIVE\"}", false);
       }
+      ac.next.degrees = degree;
       ac.next.power = true;  // We want to turn on the A/C unit.
       Serial.println("Sending a message to turn ON the A/C unit.");
       ac.sendAc();  // Have the IRac class create and send a message.
@@ -532,6 +529,7 @@ void handleMessage(const char *message) {
       } else {
         publishMessage("esp32/response", "{\"client_id\":\"ESP32-01\",\"message\":\"RECEIVE\"}", false);
       }
+      ac.next.degrees = degree;
       ac.next.power = false;  // We want to turn on the A/C unit.
       Serial.println("Sending a message to turn OFF the A/C unit.");
       ac.sendAc();  // Have the IRac class create and send a message.
@@ -560,8 +558,13 @@ void handleMessage(const char *message) {
       Serial.println("Error: Missing device_id or button_id in LEARN command.");
     }
   } else {
-    // Unknown message type, handle appropriately (if needed)
-    // ...
+    if (connectionMode == 1) {
+        UDP.beginPacket(UDP.remoteIP(), UDP.remotePort());
+        UDP.print("INVALID-CMD");
+        UDP.endPacket();
+      } else {
+        publishMessage("esp32/response", "{\"client_id\":\"ESP32-01\",\"message\":\"INVALID-CMD\"}", false);
+    }
   }
 }
 
